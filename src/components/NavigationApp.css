@@ -1,0 +1,729 @@
+.navigation-container {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: #e5e5e5;
+}
+
+.map-container {
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  background-color: #e5e5e5;
+}
+
+.controls-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  padding: 1rem;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.controls-overlay.navigating .search-panel,
+.controls-overlay.navigating .route-info-panel,
+.controls-overlay.navigating .travel-mode-selector,
+.controls-overlay.navigating .action-buttons {
+  opacity: 0;
+  transform: translateY(-20px);
+  pointer-events: none;
+  max-height: 0;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+/* Search Panel */
+.search-panel {
+  background: rgba(255, 255, 255, 0.98);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  padding: 0.75rem;
+  pointer-events: auto;
+  max-width: 600px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.search-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  background: #f5f5f5;
+  border-radius: 8px;
+  padding: 0.5rem;
+  border: 2px solid transparent;
+  transition: all 0.3s ease;
+}
+
+.search-input-wrapper:focus-within {
+  background: #ffffff;
+  border-color: #4285F4;
+  box-shadow: 0 2px 8px rgba(66, 133, 244, 0.2);
+}
+
+.location-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 0.875rem;
+  color: white;
+  flex-shrink: 0;
+}
+
+.origin-icon {
+  background: #4285F4;
+}
+
+.destination-icon {
+  background: #EA4335;
+}
+
+.search-input {
+  flex: 1;
+  padding: 0.5rem;
+  font-size: 1rem;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: #333;
+  min-width: 0;
+}
+
+.search-input::placeholder {
+  color: #999;
+}
+
+.clear-input-button,
+.my-location-button {
+  padding: 0.375rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 1rem;
+  color: #666;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+}
+
+.clear-input-button:hover,
+.my-location-button:hover {
+  background: rgba(0, 0, 0, 0.1);
+  color: #333;
+}
+
+.my-location-button.active {
+  background: #4285F4;
+  color: white;
+}
+
+.my-location-button.active:hover {
+  background: #357ae8;
+}
+
+.swap-button {
+  align-self: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid #ddd;
+  background: white;
+  cursor: pointer;
+  font-size: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.swap-button:hover {
+  background: #f5f5f5;
+  border-color: #4285F4;
+  transform: rotate(180deg);
+  box-shadow: 0 4px 12px rgba(66, 133, 244, 0.3);
+}
+
+/* Route Info Panel */
+.route-info-panel {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 12px;
+  padding: 1rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  pointer-events: auto;
+  max-width: 600px;
+  display: flex;
+  gap: 1.5rem;
+  animation: slideIn 0.3s ease;
+}
+
+.route-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.route-info-label {
+  font-size: 0.75rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.route-info-value {
+  font-size: 1.125rem;
+  color: #333;
+  font-weight: 600;
+}
+
+/* Travel Mode Selector */
+.travel-mode-selector {
+  display: flex;
+  gap: 0.5rem;
+  pointer-events: auto;
+  max-width: 600px;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 0.5rem;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.travel-mode-button {
+  flex: 1;
+  padding: 0.75rem;
+  border: 2px solid #ddd;
+  background: white;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1.5rem;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.travel-mode-button:hover {
+  border-color: #4285F4;
+  background: #f0f7ff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(66, 133, 244, 0.2);
+}
+
+.travel-mode-button.active {
+  border-color: #4285F4;
+  background: #4285F4;
+  color: white;
+  box-shadow: 0 4px 12px rgba(66, 133, 244, 0.4);
+}
+
+/* Instruction Panel */
+.instruction-panel {
+  background: rgba(66, 133, 244, 0.95);
+  color: white;
+  padding: 1rem 1.5rem;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  pointer-events: auto;
+  max-width: 600px;
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.instruction-text {
+  font-size: 1.1rem;
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* Action Buttons */
+.action-buttons {
+  display: flex;
+  gap: 0.5rem;
+  pointer-events: auto;
+  max-width: 600px;
+  flex-direction: column;
+}
+
+.start-navigation-button,
+.stop-navigation-button,
+.get-directions-button {
+  padding: 0.875rem 2rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s ease;
+  pointer-events: auto;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  width: 100%;
+}
+
+.get-directions-button {
+  background: #4285F4;
+  color: white;
+}
+
+.get-directions-button:hover {
+  background: #357ae8;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.start-navigation-button {
+  background: #4CAF50;
+  color: white;
+}
+
+.start-navigation-button:hover {
+  background: #45a049;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+/* Navigation Controls - Floating Stop Button */
+.navigation-controls {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  pointer-events: none;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  max-width: 600px;
+  padding: 0 1rem;
+}
+
+.stop-navigation-button {
+  background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+  color: white;
+  border: none;
+  border-radius: 50px;
+  padding: 1rem 2.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(244, 67, 54, 0.4);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  position: relative;
+  overflow: hidden;
+  animation: pulse 2s infinite;
+}
+
+.stop-navigation-button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  transition: left 0.5s;
+}
+
+.stop-navigation-button:hover::before {
+  left: 100%;
+}
+
+.stop-navigation-button:hover {
+  background: linear-gradient(135deg, #d32f2f 0%, #b71c1c 100%);
+  transform: translateY(-4px) scale(1.05);
+  box-shadow: 0 12px 32px rgba(244, 67, 54, 0.5);
+}
+
+.stop-navigation-button:active {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 6px 16px rgba(244, 67, 54, 0.4);
+}
+
+.stop-icon {
+  font-size: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stop-text {
+  font-weight: 600;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 8px 24px rgba(244, 67, 54, 0.4);
+  }
+  50% {
+    box-shadow: 0 8px 24px rgba(244, 67, 54, 0.6), 0 0 0 8px rgba(244, 67, 54, 0.1);
+  }
+}
+
+.navigation-hint {
+  padding: 0.75rem 1rem;
+  background: rgba(255, 193, 7, 0.95);
+  color: #333;
+  border-radius: 8px;
+  text-align: center;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+/* Error Message */
+.error-message {
+  background: rgba(244, 67, 54, 0.95);
+  color: white;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  pointer-events: auto;
+  max-width: 600px;
+  font-size: 0.9rem;
+}
+
+/* Loading Overlay */
+.loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.loading-spinner {
+  font-size: 1.5rem;
+  color: #4285F4;
+  font-weight: 500;
+}
+
+/* Map Container Improvements */
+.map-container {
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  background-color: #e5e5e5;
+  transition: opacity 0.3s ease;
+}
+
+/* Enhanced Search Panel */
+.search-panel {
+  background: rgba(255, 255, 255, 0.98);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  padding: 0.75rem;
+  pointer-events: auto;
+  max-width: 600px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  backdrop-filter: blur(10px);
+  animation: slideDown 0.4s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .controls-overlay {
+    padding: 0.75rem;
+    gap: 0.5rem;
+  }
+
+  .navigation-controls {
+    bottom: 1.5rem;
+    padding: 0 0.75rem;
+  }
+
+  .stop-navigation-button {
+    padding: 0.875rem 2rem;
+    font-size: 0.9rem;
+  }
+
+  .stop-icon {
+    font-size: 1.125rem;
+  }
+
+  .search-panel {
+    padding: 0.625rem;
+    border-radius: 10px;
+  }
+
+  .search-input {
+    font-size: 0.9rem;
+    padding: 0.5rem;
+  }
+
+  .location-icon {
+    width: 28px;
+    height: 28px;
+    font-size: 0.75rem;
+  }
+
+  .swap-button {
+    width: 36px;
+    height: 36px;
+    font-size: 1.125rem;
+  }
+
+  .route-info-panel {
+    padding: 0.875rem;
+    gap: 1rem;
+    flex-direction: column;
+  }
+
+  .route-info-value {
+    font-size: 1rem;
+  }
+
+  .travel-mode-selector {
+    padding: 0.375rem;
+  }
+
+  .travel-mode-button {
+    padding: 0.625rem;
+    font-size: 1.25rem;
+  }
+
+  .instruction-panel {
+    padding: 0.875rem 1rem;
+  }
+
+  .instruction-text {
+    font-size: 1rem;
+  }
+
+  .start-navigation-button,
+  .get-directions-button {
+    padding: 0.75rem 1.5rem;
+    font-size: 0.9rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .controls-overlay {
+    padding: 0.5rem;
+    gap: 0.5rem;
+  }
+
+  .navigation-controls {
+    bottom: 1rem;
+    padding: 0 0.5rem;
+  }
+
+  .stop-navigation-button {
+    padding: 0.75rem 1.5rem;
+    font-size: 0.875rem;
+    gap: 0.5rem;
+  }
+
+  .stop-icon {
+    font-size: 1rem;
+  }
+
+  .my-location-fab {
+    right: 0.5rem;
+    bottom: 5.5rem;
+    width: 40px;
+    height: 40px;
+  }
+
+  .my-location-fab svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .navigation-container:has(.controls-overlay.navigating) .my-location-fab {
+    bottom: 7rem;
+  }
+
+  .search-panel {
+    padding: 0.5rem;
+    border-radius: 8px;
+  }
+
+  .search-input-wrapper {
+    padding: 0.375rem;
+  }
+
+  .search-input {
+    font-size: 0.875rem;
+    padding: 0.375rem;
+  }
+
+  .location-icon {
+    width: 24px;
+    height: 24px;
+    font-size: 0.7rem;
+  }
+
+  .clear-input-button,
+  .my-location-button {
+    min-width: 28px;
+    height: 28px;
+    font-size: 0.875rem;
+  }
+
+  .swap-button {
+    width: 32px;
+    height: 32px;
+    font-size: 1rem;
+  }
+
+  .route-info-panel {
+    padding: 0.75rem;
+  }
+
+  .route-info-label {
+    font-size: 0.7rem;
+  }
+
+  .route-info-value {
+    font-size: 0.9rem;
+  }
+
+  .travel-mode-button {
+    padding: 0.5rem;
+    font-size: 1.125rem;
+  }
+
+  .instruction-text {
+    font-size: 0.9rem;
+  }
+
+  .start-navigation-button,
+  .get-directions-button {
+    padding: 0.625rem 1.25rem;
+    font-size: 0.875rem;
+  }
+}
+
+/* My Location FAB Button - Google Maps Style */
+.my-location-fab {
+  position: fixed;
+  right: 1rem;
+  bottom: 6rem;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: white;
+  border: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  color: #4285F4;
+  padding: 0;
+}
+
+.my-location-fab:hover {
+  background: #f5f5f5;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 0, 0, 0.1);
+  transform: scale(1.1);
+}
+
+.my-location-fab:active {
+  transform: scale(0.95);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.my-location-fab svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* Adjust position when navigating - use parent class */
+.navigation-container:has(.controls-overlay.navigating) .my-location-fab {
+  bottom: 8rem;
+}
+
+/* Landscape orientation for mobile */
+@media (max-width: 768px) and (orientation: landscape) {
+  .controls-overlay {
+    padding: 0.5rem;
+  }
+
+  .search-panel {
+    padding: 0.5rem;
+  }
+
+  .route-info-panel {
+    flex-direction: row;
+    padding: 0.75rem;
+  }
+
+  .my-location-fab {
+    right: 0.75rem;
+    bottom: 5rem;
+    width: 44px;
+    height: 44px;
+  }
+
+  .my-location-fab svg {
+    width: 22px;
+    height: 22px;
+  }
+}

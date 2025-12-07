@@ -1,0 +1,284 @@
+.bluetooth-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  backdrop-filter: blur(4px);
+}
+
+.bluetooth-modal {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  max-width: 500px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bluetooth-modal-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.bluetooth-modal-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.bluetooth-modal-content {
+  padding: 1.5rem;
+}
+
+.bluetooth-modal-content p {
+  margin: 0 0 1rem 0;
+  color: #666;
+  line-height: 1.6;
+}
+
+.bluetooth-hint {
+  font-size: 0.9rem;
+  color: #999;
+  font-style: italic;
+}
+
+.bluetooth-connect-btn {
+  width: 100%;
+  padding: 1rem;
+  background: linear-gradient(135deg, #4285F4 0%, #357ae8 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  box-shadow: 0 4px 12px rgba(66, 133, 244, 0.3);
+}
+
+.bluetooth-connect-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #357ae8 0%, #2968d1 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(66, 133, 244, 0.4);
+}
+
+.bluetooth-connect-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.bluetooth-connect-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.bluetooth-error {
+  background: #ffebee;
+  border: 1px solid #ef5350;
+  border-radius: 8px;
+  padding: 1rem;
+  color: #c62828;
+}
+
+.bluetooth-error p {
+  margin: 0.5rem 0;
+}
+
+.bluetooth-error ul {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.bluetooth-error li {
+  margin: 0.25rem 0;
+}
+
+.bluetooth-retry-btn {
+  margin-top: 1rem;
+  padding: 0.75rem 1.5rem;
+  background: #4285F4;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.bluetooth-retry-btn:hover {
+  background: #357ae8;
+  transform: translateY(-1px);
+}
+
+.bluetooth-info {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: #f5f5f5;
+  border-radius: 8px;
+}
+
+.bluetooth-info h3 {
+  margin: 0 0 0.75rem 0;
+  font-size: 1rem;
+  color: #333;
+}
+
+.bluetooth-info ol {
+  margin: 0;
+  padding-left: 1.5rem;
+  color: #666;
+}
+
+.bluetooth-info li {
+  margin: 0.5rem 0;
+  line-height: 1.5;
+}
+
+.bluetooth-status {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 1000;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  padding: 0.75rem 1rem;
+  animation: slideInRight 0.3s ease;
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.bluetooth-status-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.bluetooth-indicator {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.bluetooth-indicator.connected {
+  color: #4CAF50;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.bluetooth-device-name {
+  font-weight: 500;
+  color: #333;
+  font-size: 0.9rem;
+}
+
+.bluetooth-disconnect-btn {
+  padding: 0.375rem 0.75rem;
+  background: #f44336;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.bluetooth-disconnect-btn:hover {
+  background: #d32f2f;
+  transform: translateY(-1px);
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .bluetooth-modal {
+    width: 95%;
+    max-height: 95vh;
+  }
+
+  .bluetooth-modal-header {
+    padding: 1rem;
+  }
+
+  .bluetooth-modal-header h2 {
+    font-size: 1.25rem;
+  }
+
+  .bluetooth-modal-content {
+    padding: 1rem;
+  }
+
+  .bluetooth-status {
+    top: 0.5rem;
+    right: 0.5rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .bluetooth-device-name {
+    font-size: 0.8rem;
+  }
+
+  .bluetooth-disconnect-btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+  }
+}
+
