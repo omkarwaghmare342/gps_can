@@ -27,6 +27,8 @@ const NavigationApp = () => {
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
   const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(null);
   const routePathRef = useRef<google.maps.Polyline | null>(null);
+  const markerAnimationFrameRef = useRef<number | null>(null);
+  const lastMarkerPositionRef = useRef<google.maps.LatLng | null>(null);
   const originAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const destinationAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const watchIdRef = useRef<number | null>(null);
@@ -394,6 +396,41 @@ const NavigationApp = () => {
     );
   };
 
+  // Smoothly animate marker between two points
+  const animateMarkerMove = (
+    from: google.maps.LatLng,
+    to: google.maps.LatLng,
+    duration = 350
+  ) => {
+    if (!userMarkerRef.current || !mapInstanceRef.current) {
+      return;
+    }
+    if (markerAnimationFrameRef.current) {
+      cancelAnimationFrame(markerAnimationFrameRef.current);
+    }
+
+    const start = performance.now();
+    const startLat = from.lat();
+    const startLng = from.lng();
+    const endLat = to.lat();
+    const endLng = to.lng();
+
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const lat = startLat + (endLat - startLat) * t;
+      const lng = startLng + (endLng - startLng) * t;
+      const pos = new window.google.maps.LatLng(lat, lng);
+      userMarkerRef.current?.setPosition(pos);
+      // keep map centered smoothly
+      mapInstanceRef.current?.setCenter(pos);
+      if (t < 1) {
+        markerAnimationFrameRef.current = requestAnimationFrame(step);
+      }
+    };
+
+    markerAnimationFrameRef.current = requestAnimationFrame(step);
+  };
+
   const calculateRoute = (originLoc: google.maps.LatLng | null, destLoc: google.maps.LatLng) => {
     if (!directionsServiceRef.current || !directionsRendererRef.current) {
       console.log('calculateRoute: Directions service not available');
@@ -623,12 +660,27 @@ const NavigationApp = () => {
             position.coords.latitude,
             position.coords.longitude
           );
+
+          // Debounce jitter under 1m
+          if (lastMarkerPositionRef.current) {
+            const jitterDistance = window.google.maps.geometry.spherical.computeDistanceBetween(
+              lastMarkerPositionRef.current,
+              location
+            );
+            if (jitterDistance < 1) {
+              return;
+            }
+          }
+
+          const previous = lastMarkerPositionRef.current || location;
+          lastMarkerPositionRef.current = location;
+
           setCurrentLocation(location);
           setOriginLocation(location);
 
-          // Update marker position and rotation
+          // Update marker position and rotation with smooth slide
           if (userMarkerRef.current) {
-            userMarkerRef.current.setPosition(location);
+            animateMarkerMove(previous, location);
             
             // Update heading if available
             const headingValue = position.coords.heading ?? heading ?? 0;
@@ -642,7 +694,7 @@ const NavigationApp = () => {
                 strokeColor: '#ffffff',
                 strokeWeight: 2,
                 rotation: headingValue,
-                anchor: new window.google.maps.Point(0, 0),
+                anchor: new window.google.maps.Point(12, 12),
               });
             }
           } else if (mapInstanceRef.current) {
@@ -659,21 +711,13 @@ const NavigationApp = () => {
                 strokeColor: '#ffffff',
                 strokeWeight: 2,
                 rotation: headingVal,
-                anchor: new window.google.maps.Point(0, 0),
+                anchor: new window.google.maps.Point(12, 12),
               },
               title: 'Your Location',
               zIndex: 1000,
               animation: window.google.maps.Animation.DROP,
             });
-          }
-
-          // Update map center during navigation with smooth transition
-          if (mapInstanceRef.current) {
-            mapInstanceRef.current.setCenter(location);
-            // Keep zoom level appropriate for navigation (not too zoomed out)
-            if (mapInstanceRef.current.getZoom() && mapInstanceRef.current.getZoom()! < 14) {
-              mapInstanceRef.current.setZoom(15);
-            }
+            userMarkerRef.current?.setAnimation(null);
           }
 
           // Update instruction
