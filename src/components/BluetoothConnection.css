@@ -188,6 +188,12 @@
   animation: slideInRight 0.3s ease;
 }
 
+.bluetooth-status.collapsed {
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 @keyframes slideInRight {
   from {
     opacity: 0;
@@ -247,6 +253,43 @@
   transform: translateY(-1px);
 }
 
+.bluetooth-collapse-btn {
+  padding: 0.25rem 0.5rem;
+  background: transparent;
+  color: #666;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.bluetooth-collapse-btn:hover {
+  background: #f5f5f5;
+}
+
+.bluetooth-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 999px;
+  padding: 0.4rem 0.75rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  font-weight: 600;
+  color: #333;
+}
+
+.bluetooth-pill-text {
+  font-size: 0.85rem;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Mobile responsive */
 @media (max-width: 768px) {
   .bluetooth-modal {
@@ -279,6 +322,14 @@
   .bluetooth-disconnect-btn {
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
+  }
+
+  .bluetooth-pill {
+    padding: 0.35rem 0.6rem;
+  }
+
+  .bluetooth-pill-text {
+    max-width: 100px;
   }
 }
 

@@ -15,6 +15,7 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
   const [error, setError] = useState<string>('');
   const [showModal, setShowModal] = useState(true);
+  const [isCollapsed, setIsCollapsed] = useState(true);
 
   useEffect(() => {
     const supported = bluetoothService.isSupported();
@@ -28,6 +29,7 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
           setConnectedDevice(device);
           setIsConnected(true);
           setShowModal(false);
+          setIsCollapsed(true);
           onConnected(device);
         }
       }
@@ -62,6 +64,7 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
         setConnectedDevice(device);
         setIsConnected(true);
         setShowModal(false);
+        setIsCollapsed(true);
         onConnected(device);
       }
     } catch (err: any) {
@@ -78,6 +81,7 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
       setConnectedDevice(null);
       setIsConnected(false);
       setShowModal(true);
+      setIsCollapsed(true);
       onDisconnected();
     } catch (err: any) {
       setError(err.message || 'Failed to disconnect');
@@ -86,16 +90,36 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
 
   if (!showModal && isConnected) {
     return (
-      <div className="bluetooth-status">
-        <div className="bluetooth-status-content">
-          <span className="bluetooth-indicator connected">●</span>
-          <span className="bluetooth-device-name">
-            {connectedDevice?.name || 'Connected Device'}
-          </span>
-          <button onClick={handleDisconnect} className="bluetooth-disconnect-btn" title="Disconnect">
-            Disconnect
+      <div className={`bluetooth-status ${isCollapsed ? 'collapsed' : ''}`}>
+        {isCollapsed ? (
+          <button
+            className="bluetooth-pill"
+            onClick={() => setIsCollapsed(false)}
+            title="Bluetooth connected - tap to expand"
+          >
+            <span className="bluetooth-indicator connected">●</span>
+            <span className="bluetooth-pill-text">
+              {connectedDevice?.name || 'Connected'}
+            </span>
           </button>
-        </div>
+        ) : (
+          <div className="bluetooth-status-content">
+            <span className="bluetooth-indicator connected">●</span>
+            <span className="bluetooth-device-name">
+              {connectedDevice?.name || 'Connected Device'}
+            </span>
+            <button
+              onClick={() => setIsCollapsed(true)}
+              className="bluetooth-collapse-btn"
+              title="Hide status"
+            >
+              ✕
+            </button>
+            <button onClick={handleDisconnect} className="bluetooth-disconnect-btn" title="Disconnect">
+              Disconnect
+            </button>
+          </div>
+        )}
       </div>
     );
   }
