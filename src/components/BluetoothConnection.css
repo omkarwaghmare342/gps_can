@@ -178,8 +178,8 @@
 
 .bluetooth-status {
   position: fixed;
-  top: 1rem;
-  right: 1rem;
+  bottom: 1rem;
+  left: 1rem;
   z-index: 1000;
   background: white;
   border-radius: 12px;
@@ -310,8 +310,10 @@
   }
 
   .bluetooth-status {
-    top: 0.5rem;
-    right: 0.5rem;
+    bottom: 0.75rem;
+    left: 0.75rem;
+    right: auto;
+    top: auto;
     padding: 0.5rem 0.75rem;
   }
 

@@ -179,7 +179,7 @@ vercel --prod
 - Check environment variable is set correctly
 - Verify API key restrictions allow your Vercel domain
 - Check browser console for errors
-kkkkkkk
+
 ### 404 Errors on Refresh
 
 - The `vercel.json` rewrite rules should handle this

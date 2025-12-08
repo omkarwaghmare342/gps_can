@@ -400,7 +400,7 @@ const NavigationApp = () => {
   const animateMarkerMove = (
     from: google.maps.LatLng,
     to: google.maps.LatLng,
-    duration = 350
+    duration = 320
   ) => {
     if (!userMarkerRef.current || !mapInstanceRef.current) {
       return;
@@ -421,8 +421,6 @@ const NavigationApp = () => {
       const lng = startLng + (endLng - startLng) * t;
       const pos = new window.google.maps.LatLng(lat, lng);
       userMarkerRef.current?.setPosition(pos);
-      // keep map centered smoothly
-      mapInstanceRef.current?.setCenter(pos);
       if (t < 1) {
         markerAnimationFrameRef.current = requestAnimationFrame(step);
       }
@@ -661,18 +659,21 @@ const NavigationApp = () => {
             position.coords.longitude
           );
 
-          // Debounce jitter under 1m
+          // Debounce very small jitter under 0.5m
           if (lastMarkerPositionRef.current) {
             const jitterDistance = window.google.maps.geometry.spherical.computeDistanceBetween(
               lastMarkerPositionRef.current,
               location
             );
-            if (jitterDistance < 1) {
+            if (jitterDistance < 0.5) {
               return;
             }
           }
 
-          const previous = lastMarkerPositionRef.current || location;
+          const previous =
+            userMarkerRef.current?.getPosition() ||
+            lastMarkerPositionRef.current ||
+            location;
           lastMarkerPositionRef.current = location;
 
           setCurrentLocation(location);
@@ -694,7 +695,7 @@ const NavigationApp = () => {
                 strokeColor: '#ffffff',
                 strokeWeight: 2,
                 rotation: headingValue,
-                anchor: new window.google.maps.Point(12, 12),
+                anchor: new window.google.maps.Point(0, 2),
               });
             }
           } else if (mapInstanceRef.current) {
@@ -711,13 +712,18 @@ const NavigationApp = () => {
                 strokeColor: '#ffffff',
                 strokeWeight: 2,
                 rotation: headingVal,
-                anchor: new window.google.maps.Point(12, 12),
+                anchor: new window.google.maps.Point(0, 2),
               },
               title: 'Your Location',
               zIndex: 1000,
               animation: window.google.maps.Animation.DROP,
             });
             userMarkerRef.current?.setAnimation(null);
+          }
+
+          // Keep map centered toward current location while navigating
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.panTo(location);
           }
 
           // Update instruction
