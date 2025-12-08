@@ -26,6 +26,7 @@ const NavigationApp = () => {
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
   const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(null);
+  const routePathRef = useRef<google.maps.Polyline | null>(null);
   const originAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const destinationAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const watchIdRef = useRef<number | null>(null);
@@ -47,6 +48,7 @@ const NavigationApp = () => {
   const [travelMode, setTravelMode] = useState<google.maps.TravelMode | string>('DRIVING');
   const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
   const [useMyLocation, setUseMyLocation] = useState(true);
+  const [heading, setHeading] = useState<number | null>(null);
   const [bluetoothDevice, setBluetoothDevice] = useState<BluetoothDevice | null>(null);
 
   // Load Google Maps script
@@ -102,6 +104,64 @@ const NavigationApp = () => {
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
       }
+    };
+  }, []);
+
+  // Listen to device compass and rotate map/arrow accordingly
+  useEffect(() => {
+    const handleOrientation = (event: DeviceOrientationEvent) => {
+      const compassHeading = (event as any).webkitCompassHeading;
+      const alpha = typeof compassHeading === 'number' ? compassHeading : event.alpha;
+      if (typeof alpha === 'number') {
+        const normalized = (alpha + 360) % 360;
+        setHeading(normalized);
+
+        if (mapInstanceRef.current) {
+          try {
+            mapInstanceRef.current.setHeading(normalized);
+            mapInstanceRef.current.setTilt(45);
+          } catch {
+            // Some map types do not support heading/tilt; ignore
+          }
+        }
+
+        if (userMarkerRef.current) {
+          const currentIcon = userMarkerRef.current.getIcon() as google.maps.Symbol;
+          if (currentIcon) {
+            userMarkerRef.current.setIcon({
+              ...currentIcon,
+              rotation: normalized
+            });
+          }
+        }
+      }
+    };
+
+    const addListeners = async () => {
+      if (typeof window === 'undefined' || !('DeviceOrientationEvent' in window)) return;
+
+      // iOS requires permission
+      const anyDO = DeviceOrientationEvent as any;
+      if (typeof anyDO?.requestPermission === 'function') {
+        try {
+          const response = await anyDO.requestPermission();
+          if (response === 'granted') {
+            window.addEventListener('deviceorientation', handleOrientation, true);
+          }
+        } catch (err) {
+          console.warn('Device orientation permission denied or unavailable:', err);
+        }
+      } else {
+        window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+        window.addEventListener('deviceorientation', handleOrientation, true);
+      }
+    };
+
+    addListeners();
+
+    return () => {
+      window.removeEventListener('deviceorientation', handleOrientation, true);
+      window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
     };
   }, []);
 
@@ -382,6 +442,24 @@ const NavigationApp = () => {
           maneuver: step.maneuver,
         }));
         
+        // Build a hidden polyline of the route for off-route detection
+        if (routePathRef.current) {
+          routePathRef.current.setMap(null);
+        }
+        const path: google.maps.MVCArray<google.maps.LatLng> = new window.google.maps.MVCArray();
+        result.routes[0].legs.forEach((leg: google.maps.DirectionsLeg) => {
+          leg.steps.forEach((step: google.maps.DirectionsStep) => {
+            path.push(step.start_location);
+            path.push(step.end_location);
+          });
+        });
+        routePathRef.current = new window.google.maps.Polyline({
+          path,
+          strokeOpacity: 0,
+          strokeWeight: 0,
+          map: mapInstanceRef.current || undefined,
+        });
+
         // Store route info
         const routeDistance = legs.distance?.text || '';
         const routeDuration = legs.duration?.text || '';
@@ -553,33 +631,34 @@ const NavigationApp = () => {
             userMarkerRef.current.setPosition(location);
             
             // Update heading if available
-            if (position.coords.heading !== null && position.coords.heading !== undefined) {
+            const headingValue = position.coords.heading ?? heading ?? 0;
+            if (headingValue !== null && headingValue !== undefined) {
               // Rotate the marker based on heading
               userMarkerRef.current.setIcon({
                 path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                scale: 5,
+                scale: 8,
                 fillColor: '#4285F4',
                 fillOpacity: 1,
                 strokeColor: '#ffffff',
                 strokeWeight: 2,
-                rotation: position.coords.heading,
+                rotation: headingValue,
                 anchor: new window.google.maps.Point(0, 0),
               });
             }
           } else if (mapInstanceRef.current) {
             // Create navigation arrow marker
-            const heading = position.coords.heading || 0;
+            const headingVal = position.coords.heading ?? heading ?? 0;
             userMarkerRef.current = new window.google.maps.Marker({
               position: location,
               map: mapInstanceRef.current,
               icon: {
                 path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                scale: 5,
+                scale: 8,
                 fillColor: '#4285F4',
                 fillOpacity: 1,
                 strokeColor: '#ffffff',
                 strokeWeight: 2,
-                rotation: heading,
+                rotation: headingVal,
                 anchor: new window.google.maps.Point(0, 0),
               },
               title: 'Your Location',
@@ -599,6 +678,8 @@ const NavigationApp = () => {
 
           // Update instruction
           updateCurrentInstruction();
+          // Detect off-route
+          handleOffRouteCheck(location);
         },
         (error) => {
           setLocationError(`Location tracking error: ${error.message}`);
@@ -725,10 +806,78 @@ const NavigationApp = () => {
     }
   };
 
+  // Helper: shortest distance from current location to any route segment
+  const distanceToSegmentMeters = (
+    point: google.maps.LatLng,
+    start: google.maps.LatLng,
+    end: google.maps.LatLng
+  ): number => {
+    const spherical = window.google.maps.geometry.spherical;
+    const aToB = spherical.computeDistanceBetween(start, end);
+    if (aToB === 0) return spherical.computeDistanceBetween(point, start);
+
+    // Project point onto segment (clamped)
+    const aToP = spherical.computeDistanceBetween(start, point);
+    const bToP = spherical.computeDistanceBetween(end, point);
+    const t = Math.max(
+      0,
+      Math.min(
+        1,
+        (Math.pow(aToP, 2) - Math.pow(bToP, 2) + Math.pow(aToB, 2)) /
+          (2 * Math.pow(aToB, 2))
+      )
+    );
+    const projection = spherical.interpolate(start, end, t);
+    return spherical.computeDistanceBetween(point, projection);
+  };
+
+  const computeMinDistanceToRoute = (location: google.maps.LatLng): number | null => {
+    if (!routePathRef.current) return null;
+    const path = routePathRef.current.getPath();
+    if (!path || path.getLength() < 2) return null;
+
+    let minDistance = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < path.getLength() - 1; i++) {
+      const start = path.getAt(i);
+      const end = path.getAt(i + 1);
+      const segmentDistance = distanceToSegmentMeters(location, start, end);
+      minDistance = Math.min(minDistance, segmentDistance);
+    }
+    return minDistance;
+  };
+
+  const handleOffRouteCheck = (location: google.maps.LatLng) => {
+    const minDistance = computeMinDistanceToRoute(location);
+    const offRouteThreshold = 60; // meters
+
+    if (hasRoute && minDistance !== null && minDistance > offRouteThreshold) {
+      directionsRendererRef.current?.setDirections({ routes: [] } as unknown as google.maps.DirectionsResult);
+      routeStepsRef.current = [];
+      currentStepIndexRef.current = 0;
+      setHasRoute(false);
+      setRouteInfo(null);
+      setCurrentInstruction('');
+      setLocationError('You moved off the route. Please recalculate.');
+
+      if (routePathRef.current) {
+        routePathRef.current.setMap(null);
+        routePathRef.current = null;
+      }
+    }
+  };
+
   const centerOnMyLocation = () => {
     if (currentLocation && mapInstanceRef.current) {
       mapInstanceRef.current.setCenter(currentLocation);
       mapInstanceRef.current.setZoom(15);
+      
+      setOrigin('My Location');
+      setOriginLocation(currentLocation);
+      setUseMyLocation(true);
+      const originInput = document.getElementById('origin-input') as HTMLInputElement;
+      if (originInput) {
+        originInput.value = 'My Location';
+      }
       
       // Add animation
       if (userMarkerRef.current) {
@@ -761,6 +910,10 @@ const NavigationApp = () => {
     setCurrentInstruction('');
     setHasRoute(false);
     setRouteInfo(null);
+    if (routePathRef.current) {
+      routePathRef.current.setMap(null);
+      routePathRef.current = null;
+    }
     stopNavigation();
     
     // Clear input values
