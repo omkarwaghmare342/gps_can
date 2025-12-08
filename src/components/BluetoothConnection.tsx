@@ -29,7 +29,6 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
           setConnectedDevice(device);
           setIsConnected(true);
           setShowModal(false);
-          setIsCollapsed(true);
           onConnected(device);
         }
       }
@@ -64,7 +63,6 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
         setConnectedDevice(device);
         setIsConnected(true);
         setShowModal(false);
-        setIsCollapsed(true);
         onConnected(device);
       }
     } catch (err: any) {
@@ -81,7 +79,6 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
       setConnectedDevice(null);
       setIsConnected(false);
       setShowModal(true);
-      setIsCollapsed(true);
       onDisconnected();
     } catch (err: any) {
       setError(err.message || 'Failed to disconnect');
@@ -94,7 +91,10 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
         {isCollapsed ? (
           <button
             className="bluetooth-pill"
-            onClick={() => setIsCollapsed(false)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsCollapsed(false);
+            }}
             title="Bluetooth connected - tap to expand"
           >
             <span className="bluetooth-indicator connected">●</span>
@@ -109,7 +109,10 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
               {connectedDevice?.name || 'Connected Device'}
             </span>
             <button
-              onClick={() => setIsCollapsed(true)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsCollapsed(true);
+              }}
               className="bluetooth-collapse-btn"
               title="Hide status"
             >
