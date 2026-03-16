@@ -36,6 +36,7 @@ const NavigationApp = () => {
   const currentStepIndexRef = useRef<number>(0);
   const userMarkerRef = useRef<google.maps.Marker | null>(null);
   const routeInfoRef = useRef<{ distance: string; duration: string } | null>(null);
+  const traveledPathCoordinatesRef = useRef<google.maps.LatLng[]>([]);
 
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
@@ -50,19 +51,16 @@ const NavigationApp = () => {
   const [travelMode, setTravelMode] = useState<google.maps.TravelMode | string>('DRIVING');
   const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
   const [useMyLocation, setUseMyLocation] = useState(true);
-  const [heading, setHeading] = useState<number | null>(null);
+  const [previousLocation, setPreviousLocation] = useState<google.maps.LatLng | null>(null);
+  const [actualHeading, setActualHeading] = useState<number>(0);
+  const [traveledPathRef, setTraveledPathRef] = useState<google.maps.Polyline | null>(null);
   const [bluetoothDevice, setBluetoothDevice] = useState<BluetoothDevice | null>(null);
 
-  // Load Google Maps script
-  useEffect(() => {
-    console.log('NavigationApp: Component mounted');
-    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
-    console.log('NavigationApp: API Key loaded:', apiKey ? 'Yes' : 'No');
-    
+  const loadGoogleMapsScript = (apiKey: string) => {
     if (!apiKey || apiKey === 'your-google-maps-api-key') {
       console.error('NavigationApp: API key not configured');
       setLocationError('Please configure your Google Maps API key in .env file');
-      setIsMapLoaded(true); // Show UI even if API key is missing
+      setIsMapLoaded(true);
       return;
     }
 
@@ -91,16 +89,32 @@ const NavigationApp = () => {
     script.src = scriptUrl;
     script.async = true;
     script.defer = true;
+    script.crossOrigin = 'anonymous';
     script.onerror = (error) => {
       console.error('NavigationApp: Script load error:', error);
-      setLocationError('Failed to load Google Maps. Please check your API key and internet connection.');
+      setLocationError('Failed to load Google Maps. Please check your internet connection and API key.');
       setIsMapLoaded(true);
+      // Retry once after delay
+      setTimeout(() => {
+        if (!window.google || !window.google.maps) {
+          console.log('NavigationApp: Retrying Google Maps load...');
+          loadGoogleMapsScript(apiKey);
+        }
+      }, 3000);
     };
     script.onload = () => {
       console.log('NavigationApp: Script loaded successfully');
     };
     
     document.head.appendChild(script);
+  };
+
+  useEffect(() => {
+    console.log('NavigationApp: Component mounted');
+    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+    console.log('NavigationApp: API Key loaded:', apiKey ? 'Yes' : 'No');
+    
+    loadGoogleMapsScript(apiKey);
 
     return () => {
       if (watchIdRef.current !== null) {
@@ -109,16 +123,33 @@ const NavigationApp = () => {
     };
   }, []);
 
+  // Initialize traveled path when navigation starts
+  useEffect(() => {
+    if (isNavigating && currentLocation) {
+      traveledPathCoordinatesRef.current = [currentLocation];
+      // Clear previous traveled path
+      if (traveledPathRef) {
+        traveledPathRef.setMap(null);
+        setTraveledPathRef(null);
+      }
+    }
+  }, [isNavigating, currentLocation]);
+
+  const calculateHeadingFromPoints = (from: google.maps.LatLng, to: google.maps.LatLng): number => {
+    const spherical = window.google.maps.geometry.spherical;
+    return spherical.computeHeading(from, to);
+  };
+
   // Listen to device compass and rotate map/arrow accordingly
   useEffect(() => {
     const handleOrientation = (event: DeviceOrientationEvent) => {
       const compassHeading = (event as any).webkitCompassHeading;
       const alpha = typeof compassHeading === 'number' ? compassHeading : event.alpha;
       if (typeof alpha === 'number') {
-        const normalized = (alpha + 360) % 360;
-        setHeading(normalized);
+        // Convert compass heading to map heading (compass points to magnetic north, maps use true north)
+        const normalized = (360 - alpha + 90) % 360;
 
-        if (mapInstanceRef.current) {
+        if (mapInstanceRef.current && !isNavigating) {
           try {
             mapInstanceRef.current.setHeading(normalized);
             mapInstanceRef.current.setTilt(45);
@@ -127,7 +158,8 @@ const NavigationApp = () => {
           }
         }
 
-        if (userMarkerRef.current) {
+        // Only use compass for marker rotation when not navigating (GPS heading is more accurate)
+        if (userMarkerRef.current && !isNavigating) {
           const currentIcon = userMarkerRef.current.getIcon() as google.maps.Symbol;
           if (currentIcon) {
             userMarkerRef.current.setIcon({
@@ -179,7 +211,7 @@ const NavigationApp = () => {
 
       if (!window.google || !window.google.maps) {
         console.error('initializeMap: Google Maps API not loaded');
-        setLocationError('Google Maps API failed to load');
+        setLocationError('Google Maps API failed to load. Please refresh the page.');
         setIsMapLoaded(true);
         return;
       }
@@ -258,9 +290,11 @@ const NavigationApp = () => {
                 if (originInput) {
                   originInput.value = address;
                 }
+                // Reset hasRoute to allow new route calculation
+                setHasRoute(false);
                 // Recalculate route if destination is already set
                 if (destinationLocation) {
-                  calculateRoute(location, destinationLocation);
+                  setTimeout(() => calculateRoute(location, destinationLocation), 100);
                 }
               }
             }
@@ -287,10 +321,12 @@ const NavigationApp = () => {
                 const location = place.geometry.location;
                 setDestination(place.formatted_address || '');
                 setDestinationLocation(location);
+                // Reset hasRoute to allow new route calculation
+                setHasRoute(false);
                 // Calculate route with current origin
                 const originLoc = useMyLocation ? currentLocation : originLocation;
                 if (originLoc) {
-                  calculateRoute(originLoc, location);
+                  setTimeout(() => calculateRoute(originLoc, location), 100);
                 }
               }
             }
@@ -477,21 +513,30 @@ const NavigationApp = () => {
           maneuver: step.maneuver,
         }));
         
-        // Build a hidden polyline of the route for off-route detection
+        // Build a visible path for the route that follows user movement
         if (routePathRef.current) {
           routePathRef.current.setMap(null);
         }
         const path: google.maps.MVCArray<google.maps.LatLng> = new window.google.maps.MVCArray();
         result.routes[0].legs.forEach((leg: google.maps.DirectionsLeg) => {
           leg.steps.forEach((step: google.maps.DirectionsStep) => {
-            path.push(step.start_location);
-            path.push(step.end_location);
+            if (step.path) {
+              // Use the detailed path from Google Maps
+              for (let i = 0; i < step.path.length; i++) {
+                path.push(step.path[i]);
+              }
+            } else {
+              // Fallback to start/end points
+              path.push(step.start_location);
+              path.push(step.end_location);
+            }
           });
         });
         routePathRef.current = new window.google.maps.Polyline({
           path,
-          strokeOpacity: 0,
-          strokeWeight: 0,
+          strokeColor: '#4285F4',
+          strokeWeight: 5,
+          strokeOpacity: 0.8,
           map: mapInstanceRef.current || undefined,
         });
 
@@ -536,6 +581,44 @@ const NavigationApp = () => {
     });
   };
 
+  const extractTurnDirection = (instructions: string): string => {
+    const lowerInstructions = instructions.toLowerCase();
+    
+    // Check for specific turn directions
+    if (lowerInstructions.includes('turn left') || lowerInstructions.includes('left turn')) {
+      return 'LEFT';
+    } else if (lowerInstructions.includes('turn right') || lowerInstructions.includes('right turn')) {
+      return 'RIGHT';
+    } else if (lowerInstructions.includes('straight') || lowerInstructions.includes('continue')) {
+      return 'STRAIGHT';
+    } else if (lowerInstructions.includes('u-turn') || lowerInstructions.includes('make a u')) {
+      return 'U_TURN';
+    } else if (lowerInstructions.includes('roundabout') || lowerInstructions.includes('traffic circle')) {
+      return 'ROUNDABOUT';
+    } else if (lowerInstructions.includes('merge') || lowerInstructions.includes('ramp')) {
+      return 'MERGE';
+    } else if (lowerInstructions.includes('exit')) {
+      return 'EXIT';
+    } else if (lowerInstructions.includes('keep') || lowerInstructions.includes('stay')) {
+      return 'KEEP';
+    } else {
+      return 'STRAIGHT'; // Default direction
+    }
+  };
+
+  const sendNavigationData = (distance: number, turnDirection: string) => {
+    const data = `${Math.round(distance)}:${turnDirection}`;
+    console.log('Sending navigation data:', data);
+    
+    if (bluetoothDevice && bluetoothService.isConnected()) {
+      bluetoothService.sendData(data).catch((error) => {
+        console.error('Error sending navigation data via Bluetooth:', error);
+      });
+    } else {
+      console.log('Bluetooth not connected. Navigation data:', data);
+    }
+  };
+
   const updateCurrentInstruction = () => {
     if (routeStepsRef.current.length === 0 || !currentLocation) return;
 
@@ -553,6 +636,7 @@ const NavigationApp = () => {
       if (distanceToCurrentStepEnd < 50 && currentStep < steps.length - 1) {
         currentStep = currentStep + 1;
         currentStepIndexRef.current = currentStep;
+        console.log('Advanced to step:', currentStep);
       }
     }
 
@@ -564,7 +648,7 @@ const NavigationApp = () => {
         currentLocation,
         step.start_location
       );
-      const distanceToStepEnd = window.google.maps.geometry.spherical.computeDistanceBetween(
+      const distanceToEnd = window.google.maps.geometry.spherical.computeDistanceBetween(
         currentLocation,
         step.end_location
       );
@@ -574,10 +658,11 @@ const NavigationApp = () => {
       );
 
       // If user is closer to this step's end than current step, and hasn't passed it
-      if (distanceToStepEnd < distanceToStepStart && distanceToStepEnd < stepLength * 1.2) {
+      if (distanceToEnd < distanceToStepStart && distanceToEnd < stepLength * 1.2) {
         if (i > currentStep) {
           currentStep = i;
           currentStepIndexRef.current = currentStep;
+          console.log('Corrected to step:', currentStep);
           break;
         }
       }
@@ -590,7 +675,13 @@ const NavigationApp = () => {
         step.end_location
       );
 
-      // Format instruction based on distance
+      // Extract turn direction
+      const turnDirection = extractTurnDirection(step.instructions);
+      
+      // Send navigation data (distance in meters and turn direction)
+      sendNavigationData(distanceToNextTurn, turnDirection);
+
+      // Format instruction for display
       let instruction = '';
       if (distanceToNextTurn < 50) {
         instruction = step.instructions;
@@ -602,24 +693,19 @@ const NavigationApp = () => {
       }
 
       setCurrentInstruction(instruction);
-      
-      // Send instruction via Bluetooth
-      if (bluetoothDevice && bluetoothService.isConnected()) {
-        bluetoothService.sendData(instruction).catch((error) => {
-          console.error('Error sending data via Bluetooth:', error);
-        });
-      } else {
-        console.log('Bluetooth not connected. Instruction:', instruction);
-      }
     } else {
       // Reached destination
       const finalInstruction = 'You have arrived at your destination';
       setCurrentInstruction(finalInstruction);
-      if (bluetoothDevice && bluetoothService.isConnected()) {
-        bluetoothService.sendData(finalInstruction).catch((error) => {
-          console.error('Error sending data via Bluetooth:', error);
-        });
-      }
+      
+      // Send arrival data
+      sendNavigationData(0, 'ARRIVED');
+      
+      // Show arrival popup
+      setTimeout(() => {
+        alert('🎯 Destination Reached! You have successfully arrived at your destination.');
+      }, 500);
+      
       stopNavigation();
     }
   };
@@ -638,6 +724,7 @@ const NavigationApp = () => {
 
     setIsNavigating(true);
     setLocationError('');
+    setPreviousLocation(null); // Reset for heading calculation
 
     // Send "start" signal via Bluetooth when navigation begins
     if (bluetoothDevice && bluetoothService.isConnected()) {
@@ -679,14 +766,26 @@ const NavigationApp = () => {
           setCurrentLocation(location);
           setOriginLocation(location);
 
+          // Calculate heading from movement for more accurate direction
+          let calculatedHeading = actualHeading;
+          if (previousLocation) {
+            calculatedHeading = calculateHeadingFromPoints(previousLocation, location);
+            setActualHeading(calculatedHeading);
+          }
+          setPreviousLocation(location);
+
           // Update marker position and rotation with smooth slide
           if (userMarkerRef.current) {
             animateMarkerMove(previous, location);
             
-            // Update heading if available
-            const headingValue = position.coords.heading ?? heading ?? 0;
+            // Use GPS-calculated heading for navigation, fallback to compass or device heading
+            const headingValue = position.coords.heading !== null && position.coords.heading !== undefined 
+              ? position.coords.heading 
+              : calculatedHeading;
+            
             if (headingValue !== null && headingValue !== undefined) {
-              // Rotate the marker based on heading
+              // Rotate the marker based on heading (corrected for Google Maps arrow orientation)
+              const correctedHeading = (headingValue + 90) % 360;
               userMarkerRef.current.setIcon({
                 path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
                 scale: 8,
@@ -694,13 +793,16 @@ const NavigationApp = () => {
                 fillOpacity: 1,
                 strokeColor: '#ffffff',
                 strokeWeight: 2,
-                rotation: headingValue,
+                rotation: correctedHeading,
                 anchor: new window.google.maps.Point(0, 2),
               });
             }
           } else if (mapInstanceRef.current) {
             // Create navigation arrow marker
-            const headingVal = position.coords.heading ?? heading ?? 0;
+            const headingVal = position.coords.heading !== null && position.coords.heading !== undefined 
+              ? position.coords.heading 
+              : calculatedHeading;
+            const correctedHeading = (headingVal + 90) % 360;
             userMarkerRef.current = new window.google.maps.Marker({
               position: location,
               map: mapInstanceRef.current,
@@ -711,7 +813,7 @@ const NavigationApp = () => {
                 fillOpacity: 1,
                 strokeColor: '#ffffff',
                 strokeWeight: 2,
-                rotation: headingVal,
+                rotation: correctedHeading,
                 anchor: new window.google.maps.Point(0, 2),
               },
               title: 'Your Location',
@@ -719,6 +821,17 @@ const NavigationApp = () => {
               animation: window.google.maps.Animation.DROP,
             });
             userMarkerRef.current?.setAnimation(null);
+          }
+
+          // Add current location to traveled path (only if moved significantly)
+          if (previousLocation) {
+            const distanceMoved = window.google.maps.geometry.spherical.computeDistanceBetween(previousLocation, location);
+            if (distanceMoved > 5) { // Only add if moved more than 5 meters
+              traveledPathCoordinatesRef.current.push(location);
+              updateTraveledPath();
+            }
+          } else {
+            traveledPathCoordinatesRef.current.push(location);
           }
 
           // Keep map centered toward current location while navigating
@@ -757,12 +870,51 @@ const NavigationApp = () => {
     }
   };
 
+  const updateTraveledPath = () => {
+    if (!mapInstanceRef.current || traveledPathCoordinatesRef.current.length < 2) return;
+
+    // Remove old traveled path
+    if (traveledPathRef) {
+      traveledPathRef.setMap(null);
+    }
+
+    // Create new traveled path with user's actual movement
+    const traveledPath = new window.google.maps.Polyline({
+      path: traveledPathCoordinatesRef.current,
+      strokeColor: '#34A853', // Green color for traveled path
+      strokeWeight: 6,
+      strokeOpacity: 0.9,
+      map: mapInstanceRef.current,
+      zIndex: 2, // Below original route but above map
+      geodesic: true, // Follow Earth's curvature
+    });
+
+    setTraveledPathRef(traveledPath);
+  };
+
+  // Clear error messages after 5 seconds
+  useEffect(() => {
+    if (locationError) {
+      const timer = setTimeout(() => {
+        setLocationError('');
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [locationError]);
+
   const stopNavigation = () => {
     if (watchIdRef.current !== null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
     setIsNavigating(false);
+    
+    // Clear traveled path
+    if (traveledPathRef) {
+      traveledPathRef.setMap(null);
+      setTraveledPathRef(null);
+    }
+    traveledPathCoordinatesRef.current = [];
     
     // Reset marker to regular circle icon
     if (userMarkerRef.current && mapInstanceRef.current) {
@@ -774,6 +926,23 @@ const NavigationApp = () => {
         strokeColor: '#ffffff',
         strokeWeight: 2,
       });
+    }
+    
+    // Reset route state to allow new searches
+    setHasRoute(false);
+    setCurrentInstruction('');
+    setPreviousLocation(null);
+    setActualHeading(0);
+    currentStepIndexRef.current = 0;
+    routeStepsRef.current = [];
+    
+    // Clear route path and directions
+    if (routePathRef.current) {
+      routePathRef.current.setMap(null);
+      routePathRef.current = null;
+    }
+    if (directionsRendererRef.current) {
+      directionsRendererRef.current.setDirections({ routes: [] } as unknown as google.maps.DirectionsResult);
     }
     
     // Reset map padding after navigation stops
@@ -898,20 +1067,18 @@ const NavigationApp = () => {
 
   const handleOffRouteCheck = (location: google.maps.LatLng) => {
     const minDistance = computeMinDistanceToRoute(location);
-    const offRouteThreshold = 60; // meters
+    const offRouteThreshold = 100; // Increased threshold for better tolerance
 
-    if (hasRoute && minDistance !== null && minDistance > offRouteThreshold) {
-      directionsRendererRef.current?.setDirections({ routes: [] } as unknown as google.maps.DirectionsResult);
-      routeStepsRef.current = [];
-      currentStepIndexRef.current = 0;
-      setHasRoute(false);
-      setRouteInfo(null);
-      setCurrentInstruction('');
-      setLocationError('You moved off the route. Please recalculate.');
-
-      if (routePathRef.current) {
-        routePathRef.current.setMap(null);
-        routePathRef.current = null;
+    // Only check off-route if we have traveled some distance
+    if (hasRoute && minDistance !== null && traveledPathCoordinatesRef.current.length > 5) {
+      if (minDistance > offRouteThreshold) {
+        console.log(`Off route detected: ${minDistance.toFixed(2)}m from route`);
+        setLocationError(`You're ${Math.round(minDistance)}m off route. Recalculating...`);
+        
+        // Recalculate route from current location to destination
+        if (destinationLocation) {
+          calculateRoute(location, destinationLocation);
+        }
       }
     }
   };
@@ -960,6 +1127,13 @@ const NavigationApp = () => {
     setCurrentInstruction('');
     setHasRoute(false);
     setRouteInfo(null);
+    // Clear traveled path
+    if (traveledPathRef) {
+      traveledPathRef.setMap(null);
+      setTraveledPathRef(null);
+    }
+    traveledPathCoordinatesRef.current = [];
+    
     if (routePathRef.current) {
       routePathRef.current.setMap(null);
       routePathRef.current = null;
