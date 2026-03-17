@@ -9,6 +9,8 @@ declare global {
   interface Window {
     google: any;
     initMap: () => void;
+    __googleMapsApiLoadingPromise?: Promise<void>;
+    __googleMapsApiLoaded?: boolean;
   }
 }
 
@@ -23,6 +25,8 @@ interface RouteStep {
 
 const NavigationApp = () => {
   const mapRef = useRef<HTMLDivElement>(null);
+  const originInputRef = useRef<HTMLInputElement | null>(null);
+  const destinationInputRef = useRef<HTMLInputElement | null>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
   const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(null);
@@ -40,6 +44,13 @@ const NavigationApp = () => {
   const userMarkerRef = useRef<google.maps.Marker | null>(null);
   const routeInfoRef = useRef<{ distance: string; duration: string } | null>(null);
   const traveledPathCoordinatesRef = useRef<google.maps.LatLng[]>([]);
+  const traveledPathPolylineRef = useRef<google.maps.Polyline | null>(null);
+  const previousLocationRef = useRef<google.maps.LatLng | null>(null);
+  const actualHeadingRef = useRef<number>(0);
+  const useMyLocationRef = useRef<boolean>(true);
+  const currentLocationRef = useRef<google.maps.LatLng | null>(null);
+  const originLocationRef = useRef<google.maps.LatLng | null>(null);
+  const destinationLocationRef = useRef<google.maps.LatLng | null>(null);
 
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
@@ -54,10 +65,23 @@ const NavigationApp = () => {
   const [travelMode, setTravelMode] = useState<google.maps.TravelMode | string>('DRIVING');
   const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
   const [useMyLocation, setUseMyLocation] = useState(true);
-  const [previousLocation, setPreviousLocation] = useState<google.maps.LatLng | null>(null);
-  const [actualHeading, setActualHeading] = useState<number>(0);
-  const [traveledPathRef, setTraveledPathRef] = useState<google.maps.Polyline | null>(null);
   const [bluetoothDevice, setBluetoothDevice] = useState<BluetoothDevice | null>(null);
+
+  useEffect(() => {
+    useMyLocationRef.current = useMyLocation;
+  }, [useMyLocation]);
+
+  useEffect(() => {
+    currentLocationRef.current = currentLocation;
+  }, [currentLocation]);
+
+  useEffect(() => {
+    originLocationRef.current = originLocation;
+  }, [originLocation]);
+
+  useEffect(() => {
+    destinationLocationRef.current = destinationLocation;
+  }, [destinationLocation]);
 
   const loadGoogleMapsScript = (apiKey: string) => {
     if (!apiKey || apiKey === 'your-google-maps-api-key') {
@@ -74,42 +98,81 @@ const NavigationApp = () => {
       return;
     }
 
+    // StrictMode mounts effects twice in dev; avoid injecting the script multiple times.
+    if (window.__googleMapsApiLoadingPromise) {
+      window.__googleMapsApiLoadingPromise
+        .then(() => setTimeout(() => initializeMap(), 0))
+        .catch((err) => {
+          console.error('NavigationApp: Google Maps load promise failed:', err);
+          setLocationError('Failed to load Google Maps. Please check your internet connection and API key.');
+          setIsMapLoaded(true);
+        });
+      return;
+    }
+
     // Create a unique callback name
     const callbackName = `initMap_${Date.now()}`;
     console.log('NavigationApp: Setting up callback:', callbackName);
-    
-    (window as any)[callbackName] = () => {
-      console.log('NavigationApp: Google Maps callback triggered');
-      setTimeout(() => {
-        initializeMap();
-        delete (window as any)[callbackName];
-      }, 100);
-    };
 
-    const script = document.createElement('script');
-    const scriptUrl = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry&callback=${callbackName}`;
-    console.log('NavigationApp: Loading script:', scriptUrl);
-    script.src = scriptUrl;
-    script.async = true;
-    script.defer = true;
-    script.crossOrigin = 'anonymous';
-    script.onerror = (error) => {
-      console.error('NavigationApp: Script load error:', error);
-      setLocationError('Failed to load Google Maps. Please check your internet connection and API key.');
-      setIsMapLoaded(true);
-      // Retry once after delay
-      setTimeout(() => {
-        if (!window.google || !window.google.maps) {
-          console.log('NavigationApp: Retrying Google Maps load...');
-          loadGoogleMapsScript(apiKey);
-        }
-      }, 3000);
-    };
-    script.onload = () => {
-      console.log('NavigationApp: Script loaded successfully');
-    };
-    
-    document.head.appendChild(script);
+    const scriptId = 'google-maps-js';
+    window.__googleMapsApiLoadingPromise = new Promise<void>((resolve, reject) => {
+      (window as any)[callbackName] = () => {
+        console.log('NavigationApp: Google Maps callback triggered');
+        setTimeout(() => {
+          initializeMap();
+          delete (window as any)[callbackName];
+          window.__googleMapsApiLoaded = true;
+          resolve();
+        }, 100);
+      };
+
+      const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
+      if (existing) {
+        const interval = window.setInterval(() => {
+          if (window.google?.maps) {
+            window.clearInterval(interval);
+            window.__googleMapsApiLoaded = true;
+            resolve();
+          }
+        }, 100);
+        window.setTimeout(() => {
+          window.clearInterval(interval);
+          if (!window.google?.maps) {
+            window.__googleMapsApiLoadingPromise = undefined;
+            reject(new Error('Google Maps script tag present but API not available'));
+          }
+        }, 15000);
+        return;
+      }
+
+      const script = document.createElement('script');
+      const scriptUrl = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry&callback=${callbackName}`;
+      console.log('NavigationApp: Loading script:', scriptUrl);
+      script.id = scriptId;
+      script.src = scriptUrl;
+      script.async = true;
+      script.defer = true;
+      script.crossOrigin = 'anonymous';
+      script.onerror = (error) => {
+        console.error('NavigationApp: Script load error:', error);
+        setLocationError('Failed to load Google Maps. Please check your internet connection and API key.');
+        setIsMapLoaded(true);
+        window.__googleMapsApiLoadingPromise = undefined;
+        // Retry once after delay
+        setTimeout(() => {
+          if (!window.google || !window.google.maps) {
+            console.log('NavigationApp: Retrying Google Maps load...');
+            loadGoogleMapsScript(apiKey);
+          }
+        }, 3000);
+        reject(error as any);
+      };
+      script.onload = () => {
+        console.log('NavigationApp: Script loaded successfully');
+      };
+
+      document.head.appendChild(script);
+    });
   };
 
   useEffect(() => {
@@ -153,9 +216,9 @@ const NavigationApp = () => {
     if (isNavigating && currentLocation) {
       traveledPathCoordinatesRef.current = [currentLocation];
       // Clear previous traveled path
-      if (traveledPathRef) {
-        traveledPathRef.setMap(null);
-        setTraveledPathRef(null);
+      if (traveledPathPolylineRef.current) {
+        traveledPathPolylineRef.current.setMap(null);
+        traveledPathPolylineRef.current = null;
       }
     }
   }, [isNavigating, currentLocation]);
@@ -295,93 +358,66 @@ const NavigationApp = () => {
 
   // Initialize Places Autocomplete for both origin and destination
   useEffect(() => {
-    if (!isMapLoaded || !window.google || !window.google.maps || !window.google.maps.places) {
-      return;
-    }
+    if (!isMapLoaded || !mapInstanceRef.current) return;
+    if (!window.google?.maps?.places || !window.google?.maps?.event) return;
+    if (originAutocompleteRef.current || destinationAutocompleteRef.current) return;
+    if (!originInputRef.current || !destinationInputRef.current) return;
 
-    // Clear previous autocomplete instances
-    if (originAutocompleteRef.current) {
-      window.google.maps.event.clearInstanceListeners(originAutocompleteRef.current);
-      originAutocompleteRef.current = null;
-    }
-    if (destinationAutocompleteRef.current) {
-      window.google.maps.event.clearInstanceListeners(destinationAutocompleteRef.current);
-      destinationAutocompleteRef.current = null;
-    }
+    try {
+      originAutocompleteRef.current = new window.google.maps.places.Autocomplete(originInputRef.current, {
+        types: ['establishment', 'geocode'],
+        fields: ['place_id', 'formatted_address', 'geometry', 'name'],
+      });
 
-    // Wait a bit for DOM to be ready
-    const timer = setTimeout(() => {
-      // Initialize origin autocomplete
-      const originInput = document.getElementById('origin-input') as HTMLInputElement;
-      if (originInput && !originAutocompleteRef.current) {
-        try {
-          const autocomplete = new window.google.maps.places.Autocomplete(originInput, {
-            fields: ['geometry', 'formatted_address'],
-          });
-          originAutocompleteRef.current = autocomplete;
-
-          autocomplete.addListener('place_changed', () => {
-            if (originAutocompleteRef.current) {
-              const place = originAutocompleteRef.current.getPlace();
-              if (place?.geometry?.location) {
-                const location = place.geometry.location;
-                const address = place.formatted_address || '';
-                setOrigin(address);
-                setOriginLocation(location);
-                setUseMyLocation(false);
-                // Update input value
-                if (originInput) {
-                  originInput.value = address;
-                }
-                // Reset hasRoute to allow new route calculation
-                setHasRoute(false);
-                // Recalculate route if destination is already set
-                if (destinationLocation) {
-                  setTimeout(() => calculateRoute(location, destinationLocation), 100);
-                }
-              }
-            }
-          });
-          console.log('Origin Autocomplete initialized');
-        } catch (error) {
-          console.error('Error initializing Origin Autocomplete:', error);
+      const originAutocomplete = originAutocompleteRef.current;
+      originAutocomplete?.addListener('place_changed', () => {
+        const place = originAutocompleteRef.current?.getPlace();
+        if (place?.geometry?.location) {
+          setUseMyLocation(false);
+          setOrigin(place.formatted_address || place.name || '');
+          setOriginLocation(place.geometry.location);
+          setHasRoute(false);
+          const destLoc = destinationLocationRef.current;
+          if (destLoc) {
+            calculateRoute(place.geometry.location, destLoc);
+          }
         }
-      }
+      });
 
-      // Initialize destination autocomplete
-      const destInput = document.getElementById('destination-input') as HTMLInputElement;
-      if (destInput && !destinationAutocompleteRef.current) {
-        try {
-          const autocomplete = new window.google.maps.places.Autocomplete(destInput, {
-            fields: ['geometry', 'formatted_address'],
-          });
-          destinationAutocompleteRef.current = autocomplete;
+      destinationAutocompleteRef.current = new window.google.maps.places.Autocomplete(destinationInputRef.current, {
+        types: ['establishment', 'geocode'],
+        fields: ['place_id', 'formatted_address', 'geometry', 'name'],
+      });
 
-          autocomplete.addListener('place_changed', () => {
-            if (destinationAutocompleteRef.current) {
-              const place = destinationAutocompleteRef.current.getPlace();
-              if (place?.geometry?.location) {
-                const location = place.geometry.location;
-                setDestination(place.formatted_address || '');
-                setDestinationLocation(location);
-                // Reset hasRoute to allow new route calculation
-                setHasRoute(false);
-                // Calculate route with current origin
-                const originLoc = useMyLocation ? currentLocation : originLocation;
-                if (originLoc) {
-                  setTimeout(() => calculateRoute(originLoc, location), 100);
-                }
-              }
-            }
-          });
-          console.log('Destination Autocomplete initialized');
-        } catch (error) {
-          console.error('Error initializing Destination Autocomplete:', error);
+      const destinationAutocomplete = destinationAutocompleteRef.current;
+      destinationAutocomplete?.addListener('place_changed', () => {
+        const place = destinationAutocompleteRef.current?.getPlace();
+        if (place?.geometry?.location) {
+          setDestination(place.formatted_address || place.name || '');
+          setDestinationLocation(place.geometry.location);
+          setHasRoute(false);
+          const originLoc = useMyLocationRef.current
+            ? currentLocationRef.current
+            : originLocationRef.current;
+          if (originLoc) {
+            calculateRoute(originLoc, place.geometry.location);
+          }
         }
-      }
-    }, 200);
+      });
+    } catch (error) {
+      console.error('Error initializing Places Autocomplete:', error);
+    }
 
-    return () => clearTimeout(timer);
+    return () => {
+      if (originAutocompleteRef.current) {
+        window.google.maps.event.clearInstanceListeners(originAutocompleteRef.current);
+        originAutocompleteRef.current = null;
+      }
+      if (destinationAutocompleteRef.current) {
+        window.google.maps.event.clearInstanceListeners(destinationAutocompleteRef.current);
+        destinationAutocompleteRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMapLoaded]);
 
@@ -823,7 +859,8 @@ const NavigationApp = () => {
   const startNavigation = () => {
     setIsNavigating(true);
     setLocationError('');
-    setPreviousLocation(null); // Reset for heading calculation
+    previousLocationRef.current = null; // Reset for heading calculation
+    actualHeadingRef.current = 0;
     userManuallyZoomedRef.current = false; // Reset manual zoom flag
 
     // Send "start" signal via Bluetooth when navigation begins
@@ -867,12 +904,12 @@ const NavigationApp = () => {
           setOriginLocation(location);
 
           // Calculate heading from movement for more accurate direction
-          let calculatedHeading = actualHeading;
-          if (previousLocation) {
-            calculatedHeading = calculateHeadingFromPoints(previousLocation, location);
-            setActualHeading(calculatedHeading);
+          let calculatedHeading = actualHeadingRef.current;
+          if (previousLocationRef.current) {
+            calculatedHeading = calculateHeadingFromPoints(previousLocationRef.current, location);
+            actualHeadingRef.current = calculatedHeading;
           }
-          setPreviousLocation(location);
+          previousLocationRef.current = location;
 
           // Update marker position and rotation with smooth slide
           if (userMarkerRef.current) {
@@ -924,8 +961,8 @@ const NavigationApp = () => {
           }
 
           // Add current location to traveled path (only if moved significantly)
-          if (previousLocation) {
-            const distanceMoved = window.google.maps.geometry.spherical.computeDistanceBetween(previousLocation, location);
+          if (previousLocationRef.current) {
+            const distanceMoved = window.google.maps.geometry.spherical.computeDistanceBetween(previousLocationRef.current, location);
             if (distanceMoved > 5) { // Only add if moved more than 5 meters
               traveledPathCoordinatesRef.current.push(location);
               updateTraveledPath();
@@ -973,23 +1010,20 @@ const NavigationApp = () => {
   const updateTraveledPath = () => {
     if (!mapInstanceRef.current || traveledPathCoordinatesRef.current.length < 2) return;
 
-    // Remove old traveled path
-    if (traveledPathRef) {
-      traveledPathRef.setMap(null);
+    if (!traveledPathPolylineRef.current) {
+      traveledPathPolylineRef.current = new window.google.maps.Polyline({
+        path: traveledPathCoordinatesRef.current,
+        strokeColor: '#34A853', // Green color for traveled path
+        strokeWeight: 6,
+        strokeOpacity: 0.9,
+        map: mapInstanceRef.current,
+        zIndex: 2, // Below original route but above map
+        geodesic: true, // Follow Earth's curvature
+      });
+      return;
     }
 
-    // Create new traveled path with user's actual movement
-    const traveledPath = new window.google.maps.Polyline({
-      path: traveledPathCoordinatesRef.current,
-      strokeColor: '#34A853', // Green color for traveled path
-      strokeWeight: 6,
-      strokeOpacity: 0.9,
-      map: mapInstanceRef.current,
-      zIndex: 2, // Below original route but above map
-      geodesic: true, // Follow Earth's curvature
-    });
-
-    setTraveledPathRef(traveledPath);
+    traveledPathPolylineRef.current.setPath(traveledPathCoordinatesRef.current);
   };
 
   // Clear error messages after 5 seconds
@@ -1002,7 +1036,7 @@ const NavigationApp = () => {
     }
   }, [locationError]);
 
-  const stopNavigation = () => {
+  const stopNavigation = (resetSearch = true) => {
     if (watchIdRef.current !== null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
@@ -1010,9 +1044,9 @@ const NavigationApp = () => {
     setIsNavigating(false);
     
     // Clear traveled path
-    if (traveledPathRef) {
-      traveledPathRef.setMap(null);
-      setTraveledPathRef(null);
+    if (traveledPathPolylineRef.current) {
+      traveledPathPolylineRef.current.setMap(null);
+      traveledPathPolylineRef.current = null;
     }
     traveledPathCoordinatesRef.current = [];
     
@@ -1031,10 +1065,12 @@ const NavigationApp = () => {
     // Reset route state to allow new searches
     setHasRoute(false);
     setCurrentInstruction('');
-    setPreviousLocation(null);
-    setActualHeading(0);
+    previousLocationRef.current = null;
+    actualHeadingRef.current = 0;
     currentStepIndexRef.current = 0;
     routeStepsRef.current = [];
+    routeInfoRef.current = null;
+    setRouteInfo(null);
     
     // Clear route path and directions
     if (routePathRef.current) {
@@ -1053,6 +1089,27 @@ const NavigationApp = () => {
     if (destinationMarkerRef.current) {
       destinationMarkerRef.current.setMap(null);
       destinationMarkerRef.current = null;
+    }
+
+    if (resetSearch) {
+      setDestination('');
+      setDestinationLocation(null);
+      setHasRoute(false);
+      setCurrentInstruction('');
+      setLocationError('');
+      // Keep origin as "My Location" if that's the current mode, so user can immediately pick a new destination.
+      if (!useMyLocation) {
+        setOrigin('');
+        setOriginLocation(null);
+      }
+
+      // Clear input values
+      if (originInputRef.current && !useMyLocation) originInputRef.current.value = '';
+      if (destinationInputRef.current) destinationInputRef.current.value = '';
+
+      // Reset debounce state so new navigation sends immediately
+      lastSentDataRef.current = null;
+      lastSentTimeRef.current = 0;
     }
     
     // Reset map padding after navigation stops
@@ -1238,9 +1295,9 @@ const NavigationApp = () => {
     setHasRoute(false);
     setRouteInfo(null);
     // Clear traveled path
-    if (traveledPathRef) {
-      traveledPathRef.setMap(null);
-      setTraveledPathRef(null);
+    if (traveledPathPolylineRef.current) {
+      traveledPathPolylineRef.current.setMap(null);
+      traveledPathPolylineRef.current = null;
     }
     traveledPathCoordinatesRef.current = [];
     
@@ -1311,6 +1368,7 @@ const NavigationApp = () => {
                   }
                 }}
                 readOnly={useMyLocation}
+                ref={originInputRef}
               />
               {origin && !useMyLocation && (
                 <button onClick={() => { setOrigin(''); setOriginLocation(null); setHasRoute(false); }} className="clear-input-button">
@@ -1341,6 +1399,7 @@ const NavigationApp = () => {
                 className="search-input"
                 value={destination}
                 onChange={(e) => setDestination(e.target.value)}
+                ref={destinationInputRef}
               />
               {destination && (
                 <button onClick={() => { setDestination(''); setDestinationLocation(null); setHasRoute(false); }} className="clear-input-button">
@@ -1424,7 +1483,7 @@ const NavigationApp = () => {
 
         {isNavigating && (
           <div className="navigation-controls">
-            <button onClick={stopNavigation} className="stop-navigation-button">
+            <button onClick={() => stopNavigation()} className="stop-navigation-button">
               <span className="stop-icon">⏹</span>
               <span className="stop-text">Stop Navigation</span>
             </button>
