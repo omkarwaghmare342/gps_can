@@ -29,6 +29,7 @@ const NavigationApp = () => {
   const routePathRef = useRef<google.maps.Polyline | null>(null);
   const originMarkerRef = useRef<google.maps.Marker | null>(null);
   const destinationMarkerRef = useRef<google.maps.Marker | null>(null);
+  const userManuallyZoomedRef = useRef<boolean>(false);
   const markerAnimationFrameRef = useRef<number | null>(null);
   const lastMarkerPositionRef = useRef<google.maps.LatLng | null>(null);
   const originAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
@@ -257,6 +258,15 @@ const NavigationApp = () => {
 
       mapInstanceRef.current = map;
       console.log('initializeMap: Map instance created');
+
+      // Add zoom change listener to detect manual zoom
+      map.addListener('zoom_changed', () => {
+        userManuallyZoomedRef.current = true;
+        // Reset manual zoom flag after 10 seconds of no zoom changes
+        setTimeout(() => {
+          userManuallyZoomedRef.current = false;
+        }, 10000);
+      });
 
       // Initialize Directions Service and Renderer
       directionsServiceRef.current = new window.google.maps.DirectionsService();
@@ -696,8 +706,12 @@ const NavigationApp = () => {
       lastSentDataRef.current.direction !== turnDirection;
     const timeElapsed = now - lastSentTimeRef.current;
     
-    // Only send if significant change or enough time has passed
-    if ((distanceChanged || directionChanged) && timeElapsed >= MIN_TIME_INTERVAL) {
+    // Only send if significant change OR direction change AND enough time has passed
+    // Also ensure distance is decreasing (monotonic) to prevent back-and-forth
+    const isDistanceDecreasing = !lastSentDataRef.current || distance <= lastSentDataRef.current.distance;
+    const shouldSend = ((distanceChanged && isDistanceDecreasing) || directionChanged) && timeElapsed >= MIN_TIME_INTERVAL;
+    
+    if (shouldSend) {
       const data = `${Math.round(distance)}:${turnDirection}`;
       console.log('Sending navigation data:', data);
       
@@ -807,20 +821,10 @@ const NavigationApp = () => {
   };
 
   const startNavigation = () => {
-    if (routeStepsRef.current.length === 0) {
-      setLocationError('No route available. Please select a destination first.');
-      return;
-    }
-
-    // If using custom origin (not my location), we can still navigate but won't track GPS
-    if (!useMyLocation && !navigator.geolocation) {
-      setLocationError('GPS tracking requires location access. Please enable "My Location" for live navigation.');
-      return;
-    }
-
     setIsNavigating(true);
     setLocationError('');
     setPreviousLocation(null); // Reset for heading calculation
+    userManuallyZoomedRef.current = false; // Reset manual zoom flag
 
     // Send "start" signal via Bluetooth when navigation begins
     if (bluetoothDevice && bluetoothService.isConnected()) {
@@ -930,8 +934,8 @@ const NavigationApp = () => {
             traveledPathCoordinatesRef.current.push(location);
           }
 
-          // Keep map centered toward current location while navigating
-          if (mapInstanceRef.current) {
+          // Keep map centered toward current location while navigating (only if user hasn't manually zoomed)
+          if (mapInstanceRef.current && !userManuallyZoomedRef.current) {
             mapInstanceRef.current.panTo(location);
           }
 
