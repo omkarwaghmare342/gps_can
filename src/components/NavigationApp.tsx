@@ -223,11 +223,6 @@ const NavigationApp = () => {
     }
   }, [isNavigating, currentLocation]);
 
-  const calculateHeadingFromPoints = (from: google.maps.LatLng, to: google.maps.LatLng): number => {
-    const spherical = window.google.maps.geometry.spherical;
-    return spherical.computeHeading(from, to);
-  };
-
   // Listen to device compass and rotate map/arrow accordingly
   useEffect(() => {
     const handleOrientation = (event: DeviceOrientationEvent) => {
@@ -423,13 +418,16 @@ const NavigationApp = () => {
 
   // Calculate route when both origin and destination are available
   useEffect(() => {
+    // During navigation, route recalculation is handled explicitly (off-route detection).
+    // Recalculating here on every GPS tick causes flicker and unstable distance/turn data.
+    if (isNavigating) return;
     const origin = useMyLocation ? currentLocation : originLocation;
     if (origin && destinationLocation) {
       console.log('Both locations available, calculating route');
       calculateRoute(origin, destinationLocation);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentLocation, originLocation, destinationLocation, useMyLocation]);
+  }, [currentLocation, originLocation, destinationLocation, useMyLocation, isNavigating]);
 
   const requestLocationPermission = () => {
     if (!navigator.geolocation) {
@@ -733,6 +731,67 @@ const NavigationApp = () => {
   const MIN_DISTANCE_CHANGE = 10; // Minimum meters change before sending new data
   const MIN_TIME_INTERVAL = 2000; // Minimum time between updates (ms)
   const lastSentTimeRef = useRef<number>(0);
+  const turnSentRef = useRef<{ stepIndex: number; sent: boolean }>({ stepIndex: -1, sent: false });
+
+  const normalizeAngle = (deg: number) => ((deg % 360) + 360) % 360;
+
+  const shortestAngleDelta = (fromDeg: number, toDeg: number) => {
+    const from = normalizeAngle(fromDeg);
+    const to = normalizeAngle(toDeg);
+    let delta = to - from;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+    return delta;
+  };
+
+  const lerpAngle = (fromDeg: number, toDeg: number, t: number) => {
+    const delta = shortestAngleDelta(fromDeg, toDeg);
+    return normalizeAngle(fromDeg + delta * t);
+  };
+
+  // Bearing (degrees) between two coordinates (requested formula).
+  const getBearing = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const toDeg = (rad: number) => (rad * 180) / Math.PI;
+
+    const dLon = toRad(lon2 - lon1);
+    const rLat1 = toRad(lat1);
+    const rLat2 = toRad(lat2);
+
+    const y = Math.sin(dLon) * Math.cos(rLat2);
+    const x =
+      Math.cos(rLat1) * Math.sin(rLat2) -
+      Math.sin(rLat1) * Math.cos(rLat2) * Math.cos(dLon);
+
+    const bearing = toDeg(Math.atan2(y, x));
+    return normalizeAngle(bearing);
+  };
+
+  // Simple GPS smoothing: moving average of last N points.
+  const smoothedLocationRef = useRef<google.maps.LatLng | null>(null);
+  const recentLocationsRef = useRef<Array<{ lat: number; lng: number }>>([]);
+  const SMOOTHING_WINDOW = 5;
+
+  const smoothLocation = (raw: google.maps.LatLng) => {
+    const list = recentLocationsRef.current;
+    list.push({ lat: raw.lat(), lng: raw.lng() });
+    if (list.length > SMOOTHING_WINDOW) list.shift();
+
+    const avg = list.reduce(
+      (acc, p) => ({ lat: acc.lat + p.lat, lng: acc.lng + p.lng }),
+      { lat: 0, lng: 0 }
+    );
+    const lat = avg.lat / list.length;
+    const lng = avg.lng / list.length;
+    const smoothed = new window.google.maps.LatLng(lat, lng);
+    smoothedLocationRef.current = smoothed;
+    return smoothed;
+  };
+
+  const lastUiUpdateRef = useRef<number>(0);
+  const lastCameraUpdateRef = useRef<number>(0);
+  const lastInstructionDistanceRef = useRef<number | null>(null);
+  const lastHeadingDegRef = useRef<number>(0);
 
   const sendNavigationData = (distance: number, turnDirection: string) => {
     const now = Date.now();
@@ -770,6 +829,9 @@ const NavigationApp = () => {
 
     const steps = routeStepsRef.current;
     let currentStep = currentStepIndexRef.current;
+    if (turnSentRef.current.stepIndex !== currentStep) {
+      turnSentRef.current = { stepIndex: currentStep, sent: false };
+    }
     
     // Check if user has passed the current step
     if (currentStep < steps.length) {
@@ -824,17 +886,34 @@ const NavigationApp = () => {
       // Extract turn direction
       const turnDirection = extractTurnDirection(step.instructions);
       
-      // Send navigation data (distance in meters and turn direction)
-      sendNavigationData(distanceToNextTurn, turnDirection);
+      // Stabilize displayed/sent distance: ignore tiny jumps (2–5m), and smooth by clamping sudden spikes.
+      const prevDist = lastInstructionDistanceRef.current;
+      let stableDistance = distanceToNextTurn;
+      if (typeof prevDist === 'number') {
+        if (Math.abs(distanceToNextTurn - prevDist) < 5) {
+          stableDistance = prevDist;
+        } else {
+          // light smoothing
+          stableDistance = prevDist * 0.7 + distanceToNextTurn * 0.3;
+        }
+      }
+      lastInstructionDistanceRef.current = stableDistance;
+
+      // Bluetooth: send only once per turn "event" (approach window), reset when step changes.
+      const TURN_SEND_DISTANCE_M = 80;
+      if (!turnSentRef.current.sent && stableDistance <= TURN_SEND_DISTANCE_M) {
+        sendNavigationData(stableDistance, turnDirection);
+        turnSentRef.current.sent = true;
+      }
 
       // Format instruction for display
       let instruction = '';
       if (distanceToNextTurn < 50) {
         instruction = step.instructions;
       } else if (distanceToNextTurn < 1000) {
-        instruction = `In ${Math.round(distanceToNextTurn)}m, ${step.instructions}`;
+        instruction = `In ${Math.round(stableDistance)}m, ${step.instructions}`;
       } else {
-        const km = (distanceToNextTurn / 1000).toFixed(1);
+        const km = (stableDistance / 1000).toFixed(1);
         instruction = `In ${km}km, ${step.instructions}`;
       }
 
@@ -861,6 +940,13 @@ const NavigationApp = () => {
     setLocationError('');
     previousLocationRef.current = null; // Reset for heading calculation
     actualHeadingRef.current = 0;
+    recentLocationsRef.current = [];
+    smoothedLocationRef.current = null;
+    lastUiUpdateRef.current = 0;
+    lastCameraUpdateRef.current = 0;
+    lastInstructionDistanceRef.current = null;
+    lastHeadingDegRef.current = 0;
+    turnSentRef.current = { stepIndex: -1, sent: false };
     userManuallyZoomedRef.current = false; // Reset manual zoom flag
 
     // Send "start" signal via Bluetooth when navigation begins
@@ -878,7 +964,7 @@ const NavigationApp = () => {
     if (useMyLocation && navigator.geolocation) {
       watchIdRef.current = navigator.geolocation.watchPosition(
         (position) => {
-          const location = new window.google.maps.LatLng(
+          const rawLocation = new window.google.maps.LatLng(
             position.coords.latitude,
             position.coords.longitude
           );
@@ -887,27 +973,45 @@ const NavigationApp = () => {
           if (lastMarkerPositionRef.current) {
             const jitterDistance = window.google.maps.geometry.spherical.computeDistanceBetween(
               lastMarkerPositionRef.current,
-              location
+              rawLocation
             );
             if (jitterDistance < 0.5) {
               return;
             }
           }
 
+          const location = smoothLocation(rawLocation);
           const previous =
             userMarkerRef.current?.getPosition() ||
             lastMarkerPositionRef.current ||
             location;
           lastMarkerPositionRef.current = location;
 
-          setCurrentLocation(location);
-          setOriginLocation(location);
+          // Throttle React state updates (prevents UI flicker/reflow on mobile).
+          const now = Date.now();
+          const uiIntervalMs = 350;
+          if (now - lastUiUpdateRef.current >= uiIntervalMs) {
+            setCurrentLocation(location);
+            // Keep originLocation in sync for future route requests, but don't spam re-renders.
+            setOriginLocation(location);
+            lastUiUpdateRef.current = now;
+          } else {
+            currentLocationRef.current = location;
+            originLocationRef.current = location;
+          }
 
           // Calculate heading from movement for more accurate direction
-          let calculatedHeading = actualHeadingRef.current;
+          let bearingDeg = lastHeadingDegRef.current;
           if (previousLocationRef.current) {
-            calculatedHeading = calculateHeadingFromPoints(previousLocationRef.current, location);
-            actualHeadingRef.current = calculatedHeading;
+            bearingDeg = getBearing(
+              previousLocationRef.current.lat(),
+              previousLocationRef.current.lng(),
+              location.lat(),
+              location.lng()
+            );
+            // Smooth rotation (avoid sudden jumps)
+            bearingDeg = lerpAngle(lastHeadingDegRef.current, bearingDeg, 0.25);
+            lastHeadingDegRef.current = bearingDeg;
           }
           previousLocationRef.current = location;
 
@@ -915,14 +1019,9 @@ const NavigationApp = () => {
           if (userMarkerRef.current) {
             animateMarkerMove(previous, location);
             
-            // Use GPS-calculated heading for navigation, fallback to compass or device heading
-            const headingValue = position.coords.heading !== null && position.coords.heading !== undefined 
-              ? position.coords.heading 
-              : calculatedHeading;
-            
-            if (headingValue !== null && headingValue !== undefined) {
-              // Rotate the marker based on heading (corrected for Google Maps arrow orientation)
-              const correctedHeading = (headingValue + 90) % 360;
+            // Rotate the marker based on bearing (corrected for Google Maps arrow orientation)
+            if (typeof bearingDeg === 'number' && !Number.isNaN(bearingDeg)) {
+              const correctedHeading = (bearingDeg + 90) % 360;
               userMarkerRef.current.setIcon({
                 path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
                 scale: 8,
@@ -936,10 +1035,7 @@ const NavigationApp = () => {
             }
           } else if (mapInstanceRef.current) {
             // Create navigation arrow marker
-            const headingVal = position.coords.heading !== null && position.coords.heading !== undefined 
-              ? position.coords.heading 
-              : calculatedHeading;
-            const correctedHeading = (headingVal + 90) % 360;
+            const correctedHeading = (bearingDeg + 90) % 360;
             userMarkerRef.current = new window.google.maps.Marker({
               position: location,
               map: mapInstanceRef.current,
@@ -973,13 +1069,26 @@ const NavigationApp = () => {
 
           // Keep map centered toward current location while navigating (only if user hasn't manually zoomed)
           if (mapInstanceRef.current && !userManuallyZoomedRef.current) {
-            mapInstanceRef.current.panTo(location);
+            // Throttle camera updates and only move when significant change.
+            const camIntervalMs = 700;
+            const lastCam = currentLocationRef.current;
+            const moved =
+              lastCam
+                ? window.google.maps.geometry.spherical.computeDistanceBetween(lastCam, location)
+                : Number.POSITIVE_INFINITY;
+            if (moved > 5 && now - lastCameraUpdateRef.current >= camIntervalMs) {
+              mapInstanceRef.current.panTo(location);
+              lastCameraUpdateRef.current = now;
+            }
           }
 
           // Update instruction
           updateCurrentInstruction();
           // Detect off-route
-          handleOffRouteCheck(location);
+          // Off-route check is relatively expensive; run it less frequently.
+          if (now - lastCameraUpdateRef.current >= 1000) {
+            handleOffRouteCheck(location);
+          }
         },
         (error) => {
           setLocationError(`Location tracking error: ${error.message}`);
@@ -1067,6 +1176,11 @@ const NavigationApp = () => {
     setCurrentInstruction('');
     previousLocationRef.current = null;
     actualHeadingRef.current = 0;
+    recentLocationsRef.current = [];
+    smoothedLocationRef.current = null;
+    lastInstructionDistanceRef.current = null;
+    lastHeadingDegRef.current = 0;
+    turnSentRef.current = { stepIndex: -1, sent: false };
     currentStepIndexRef.current = 0;
     routeStepsRef.current = [];
     routeInfoRef.current = null;
