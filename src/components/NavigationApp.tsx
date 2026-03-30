@@ -48,12 +48,14 @@ const NavigationApp = () => {
   const previousLocationRef = useRef<google.maps.LatLng | null>(null);
   const actualHeadingRef = useRef<number>(0);
   const useMyLocationRef = useRef<boolean>(true);
+  const userInteractingWithMapRef = useRef<boolean>(false);
   const currentLocationRef = useRef<google.maps.LatLng | null>(null);
   const originLocationRef = useRef<google.maps.LatLng | null>(null);
   const destinationLocationRef = useRef<google.maps.LatLng | null>(null);
 
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
+  const isNavigatingRef = useRef(false);
   const [currentLocation, setCurrentLocation] = useState<google.maps.LatLng | null>(null);
   const [origin, setOrigin] = useState<string>('');
   const [originLocation, setOriginLocation] = useState<google.maps.LatLng | null>(null);
@@ -66,6 +68,10 @@ const NavigationApp = () => {
   const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
   const [useMyLocation, setUseMyLocation] = useState(true);
   const [bluetoothDevice, setBluetoothDevice] = useState<BluetoothDevice | null>(null);
+
+  useEffect(() => {
+    isNavigatingRef.current = isNavigating;
+  }, [isNavigating]);
 
   useEffect(() => {
     useMyLocationRef.current = useMyLocation;
@@ -311,7 +317,8 @@ const NavigationApp = () => {
         rotateControlOptions: {
           position: window.google.maps.ControlPosition.TOP_RIGHT,
         },
-        gestureHandling: 'cooperative',
+        // Mobile-friendly: allow smooth panning without requiring multi-touch.
+        gestureHandling: 'greedy',
       });
 
       mapInstanceRef.current = map;
@@ -320,10 +327,23 @@ const NavigationApp = () => {
       // Add zoom change listener to detect manual zoom
       map.addListener('zoom_changed', () => {
         userManuallyZoomedRef.current = true;
+        userInteractingWithMapRef.current = true;
         // Reset manual zoom flag after 10 seconds of no zoom changes
         setTimeout(() => {
           userManuallyZoomedRef.current = false;
+          userInteractingWithMapRef.current = false;
         }, 10000);
+      });
+
+      // If the user drags/pans the map, temporarily stop auto-follow camera.
+      map.addListener('dragstart', () => {
+        userInteractingWithMapRef.current = true;
+      });
+      map.addListener('dragend', () => {
+        // Let the user finish the gesture; auto-follow can resume after a short delay.
+        window.setTimeout(() => {
+          userInteractingWithMapRef.current = false;
+        }, 1500);
       });
 
       // Initialize Directions Service and Renderer
@@ -619,6 +639,7 @@ const NavigationApp = () => {
 
         // Create custom origin and destination markers
         if (originLoc && destLoc) {
+          const markerMap = isNavigatingRef.current ? null : mapInstanceRef.current || undefined;
           // Clear previous markers
           if (originMarkerRef.current) {
             originMarkerRef.current.setMap(null);
@@ -630,7 +651,7 @@ const NavigationApp = () => {
           // Create origin marker
           originMarkerRef.current = new window.google.maps.Marker({
             position: originLoc,
-            map: mapInstanceRef.current || undefined,
+            map: markerMap,
             icon: {
               path: window.google.maps.SymbolPath.CIRCLE,
               scale: 8,
@@ -642,11 +663,12 @@ const NavigationApp = () => {
             label: 'A',
             title: 'Origin',
           });
+          originMarkerRef.current?.setVisible(!isNavigatingRef.current);
 
           // Create destination marker
           destinationMarkerRef.current = new window.google.maps.Marker({
             position: destLoc,
-            map: mapInstanceRef.current || undefined,
+            map: markerMap,
             icon: {
               path: window.google.maps.SymbolPath.CIRCLE,
               scale: 8,
@@ -658,6 +680,7 @@ const NavigationApp = () => {
             label: 'B',
             title: 'Destination',
           });
+          destinationMarkerRef.current?.setVisible(!isNavigatingRef.current);
         }
 
         // Store route info
@@ -792,6 +815,8 @@ const NavigationApp = () => {
   const lastCameraUpdateRef = useRef<number>(0);
   const lastInstructionDistanceRef = useRef<number | null>(null);
   const lastHeadingDegRef = useRef<number>(0);
+  const lastInstructionRenderedRef = useRef<string>('');
+  const lastInstructionUiUpdateRef = useRef<number>(0);
 
   const sendNavigationData = (distance: number, turnDirection: string) => {
     const now = Date.now();
@@ -917,10 +942,21 @@ const NavigationApp = () => {
         instruction = `In ${km}km, ${step.instructions}`;
       }
 
-      setCurrentInstruction(instruction);
+      const now = Date.now();
+      // Throttle UI instruction updates to reduce re-render churn on mobile.
+      if (
+        instruction !== lastInstructionRenderedRef.current ||
+        now - lastInstructionUiUpdateRef.current >= 300
+      ) {
+        lastInstructionRenderedRef.current = instruction;
+        lastInstructionUiUpdateRef.current = now;
+        setCurrentInstruction(instruction);
+      }
     } else {
       // Reached destination
       const finalInstruction = 'You have arrived at your destination';
+      lastInstructionRenderedRef.current = finalInstruction;
+      lastInstructionUiUpdateRef.current = Date.now();
       setCurrentInstruction(finalInstruction);
       
       // Send arrival data
@@ -937,6 +973,7 @@ const NavigationApp = () => {
 
   const startNavigation = () => {
     setIsNavigating(true);
+    isNavigatingRef.current = true;
     setLocationError('');
     previousLocationRef.current = null; // Reset for heading calculation
     actualHeadingRef.current = 0;
@@ -948,6 +985,17 @@ const NavigationApp = () => {
     lastHeadingDegRef.current = 0;
     turnSentRef.current = { stepIndex: -1, sent: false };
     userManuallyZoomedRef.current = false; // Reset manual zoom flag
+    userInteractingWithMapRef.current = false;
+
+    // Hide route endpoints ("A"/"B") once navigation begins.
+    if (originMarkerRef.current) {
+      originMarkerRef.current.setVisible(false);
+      originMarkerRef.current.setMap(null);
+    }
+    if (destinationMarkerRef.current) {
+      destinationMarkerRef.current.setVisible(false);
+      destinationMarkerRef.current.setMap(null);
+    }
 
     // Send "start" signal via Bluetooth when navigation begins
     if (bluetoothDevice && bluetoothService.isConnected()) {
@@ -1068,7 +1116,11 @@ const NavigationApp = () => {
           }
 
           // Keep map centered toward current location while navigating (only if user hasn't manually zoomed)
-          if (mapInstanceRef.current && !userManuallyZoomedRef.current) {
+          if (
+            mapInstanceRef.current &&
+            !userManuallyZoomedRef.current &&
+            !userInteractingWithMapRef.current
+          ) {
             // Throttle camera updates and only move when significant change.
             const camIntervalMs = 700;
             const lastCam = currentLocationRef.current;
@@ -1151,6 +1203,7 @@ const NavigationApp = () => {
       watchIdRef.current = null;
     }
     setIsNavigating(false);
+    isNavigatingRef.current = false;
     
     // Clear traveled path
     if (traveledPathPolylineRef.current) {

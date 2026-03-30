@@ -310,6 +310,8 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
   width: 100%;
+  min-height: 44px; /* finger-friendly tap target */
+  touch-action: manipulation; /* prevent accidental double-tap zoom delays */
 }
 
 .get-directions-button {
@@ -690,6 +692,7 @@
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   color: #4285F4;
   padding: 0;
+  touch-action: manipulation;
 }
 
 .my-location-fab:hover {
