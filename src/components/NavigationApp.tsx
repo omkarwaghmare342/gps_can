@@ -637,9 +637,9 @@ const NavigationApp = () => {
           map: mapInstanceRef.current || undefined,
         });
 
-        // Create custom origin and destination markers
-        if (originLoc && destLoc) {
-          const markerMap = isNavigatingRef.current ? null : mapInstanceRef.current || undefined;
+        // Create custom origin and destination markers only when NOT navigating
+        if (originLoc && destLoc && !isNavigatingRef.current) {
+          const markerMap = mapInstanceRef.current || undefined;
           // Clear previous markers
           if (originMarkerRef.current) {
             originMarkerRef.current.setMap(null);
@@ -663,7 +663,7 @@ const NavigationApp = () => {
             label: 'A',
             title: 'Origin',
           });
-          originMarkerRef.current?.setVisible(!isNavigatingRef.current);
+          originMarkerRef.current?.setVisible(true);
 
           // Create destination marker
           destinationMarkerRef.current = new window.google.maps.Marker({
@@ -680,7 +680,7 @@ const NavigationApp = () => {
             label: 'B',
             title: 'Destination',
           });
-          destinationMarkerRef.current?.setVisible(!isNavigatingRef.current);
+          destinationMarkerRef.current?.setVisible(true);
         }
 
         // Store route info
