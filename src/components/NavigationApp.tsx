@@ -936,12 +936,8 @@ const NavigationApp = () => {
       }
       lastInstructionDistanceRef.current = stableDistance;
 
-      // Bluetooth: send only once per turn "event" (approach window), reset when step changes.
-      const TURN_SEND_DISTANCE_M = 80;
-      if (!turnSentRef.current.sent && stableDistance <= TURN_SEND_DISTANCE_M) {
-        sendNavigationData(stableDistance, turnDirection);
-        turnSentRef.current.sent = true;
-      }
+      // Bluetooth: send continuous updates with debouncing
+      sendNavigationData(stableDistance, turnDirection);
 
       // Format instruction for display
       let instruction = '';
@@ -1213,56 +1209,30 @@ const NavigationApp = () => {
   };
 
   const updateRemainingRoutePath = (currentLocation: google.maps.LatLng) => {
-    if (!routePathRef.current || !isNavigatingRef.current || routeStepsRef.current.length === 0) return;
+    if (!routePathRef.current || !isNavigatingRef.current || routeStepsRef.current.length === 0) {
+      console.log('updateRemainingRoutePath: Skipping - conditions not met', {
+        hasRoutePath: !!routePathRef.current,
+        isNavigating: isNavigatingRef.current,
+        hasSteps: routeStepsRef.current.length
+      });
+      return;
+    }
 
-    // Find the remaining path from current position to destination
-    const remainingPath: google.maps.LatLng[] = [];
+    console.log('updateRemainingRoutePath: Updating remaining path');
+    
+    // Simple approach: create path from current location to destination
+    const remainingPath: google.maps.LatLng[] = [currentLocation];
     const currentStep = currentStepIndexRef.current;
     
-    // Add current location as starting point
-    remainingPath.push(currentLocation);
-    
-    // Add the rest of the current step from current position to step end
-    if (currentStep < routeStepsRef.current.length) {
-      const step = routeStepsRef.current[currentStep];
-      if (step.path && step.path.length > 0) {
-        // Find the closest point on the step path to current location
-        let closestIndex = 0;
-        let minDistance = Infinity;
-        
-        for (let i = 0; i < step.path.length; i++) {
-          const distance = window.google.maps.geometry.spherical.computeDistanceBetween(
-            currentLocation, 
-            step.path[i]
-          );
-          if (distance < minDistance) {
-            minDistance = distance;
-            closestIndex = i;
-          }
-        }
-        
-        // Add remaining points from current step
-        for (let i = closestIndex + 1; i < step.path.length; i++) {
-          remainingPath.push(step.path[i]);
-        }
-      }
-      
-      // Add all subsequent steps
-      for (let i = currentStep + 1; i < routeStepsRef.current.length; i++) {
-        const step = routeStepsRef.current[i];
-        if (step.path) {
-          for (let j = 0; j < step.path.length; j++) {
-            remainingPath.push(step.path[j]);
-          }
-        } else {
-          remainingPath.push(step.start_location);
-          remainingPath.push(step.end_location);
-        }
-      }
+    // Add all remaining step endpoints
+    for (let i = currentStep; i < routeStepsRef.current.length; i++) {
+      const step = routeStepsRef.current[i];
+      remainingPath.push(step.end_location);
     }
     
     // Update the route path to show only remaining portion
     routePathRef.current.setPath(remainingPath);
+    console.log('updateRemainingRoutePath: Path updated with', remainingPath.length, 'points');
   };
 
   // Clear error messages after 5 seconds
