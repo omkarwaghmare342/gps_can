@@ -861,8 +861,9 @@ const NavigationApp = () => {
     }
   };
 
-  const updateCurrentInstruction = () => {
-    if (routeStepsRef.current.length === 0 || !currentLocation) {
+  const updateCurrentInstruction = (location?: google.maps.LatLng) => {
+    const currentLoc = location || currentLocation; // Use passed location or fall back to state
+    if (routeStepsRef.current.length === 0 || !currentLoc) {
       console.log('updateCurrentInstruction: No steps or location');
       return;
     }
@@ -878,7 +879,7 @@ const NavigationApp = () => {
     // Check if user has passed the current step
     if (currentStep < steps.length) {
       const distanceToCurrentStepEnd = window.google.maps.geometry.spherical.computeDistanceBetween(
-        currentLocation,
+        currentLoc,
         steps[currentStep].end_location
       );
       console.log('updateCurrentInstruction: Distance to step end:', distanceToCurrentStepEnd.toFixed(2) + 'm');
@@ -896,11 +897,11 @@ const NavigationApp = () => {
     for (let i = Math.max(0, currentStep - 2); i < Math.min(steps.length, currentStep + 3); i++) {
       const step = steps[i];
       const distanceToStepStart = window.google.maps.geometry.spherical.computeDistanceBetween(
-        currentLocation,
+        currentLoc,
         step.start_location
       );
       const distanceToEnd = window.google.maps.geometry.spherical.computeDistanceBetween(
-        currentLocation,
+        currentLoc,
         step.end_location
       );
       const stepLength = window.google.maps.geometry.spherical.computeDistanceBetween(
@@ -922,7 +923,7 @@ const NavigationApp = () => {
     if (currentStep < steps.length) {
       const step = steps[currentStep];
       const distanceToNextTurn = window.google.maps.geometry.spherical.computeDistanceBetween(
-        currentLocation,
+        currentLoc,
         step.end_location
       );
 
@@ -1140,7 +1141,7 @@ const NavigationApp = () => {
               traveledPathCoordinatesRef.current.push(location);
               updateTraveledPath();
               updateRemainingRoutePath(location); // Update remaining route path
-              updateCurrentInstruction(); // Update instruction when moving
+              updateCurrentInstruction(location); // Update instruction when moving with current location
             }
           } else {
             traveledPathCoordinatesRef.current.push(location);
