@@ -20,6 +20,7 @@ interface RouteStep {
   instructions: string;
   start_location: google.maps.LatLng;
   end_location: google.maps.LatLng;
+  path?: google.maps.LatLng[];
   maneuver?: string;
 }
 
@@ -350,14 +351,14 @@ const NavigationApp = () => {
       directionsServiceRef.current = new window.google.maps.DirectionsService();
       directionsRendererRef.current = new window.google.maps.DirectionsRenderer({
         map: map,
-        suppressMarkers: false, // We'll control markers manually
+        suppressMarkers: true, // Suppress markers by default, we'll control them manually
         polylineOptions: {
           strokeColor: '#4285F4',
           strokeWeight: 5,
           strokeOpacity: 0.8,
         },
         markerOptions: {
-          visible: true,
+          visible: false,
         },
       });
 
@@ -598,6 +599,16 @@ const NavigationApp = () => {
       if (status === window.google.maps.DirectionsStatus.OK && result) {
         directionsRendererRef.current?.setDirections(result);
         
+        // Immediately suppress markers if currently navigating
+        if (isNavigatingRef.current && directionsRendererRef.current) {
+          directionsRendererRef.current.setOptions({
+            suppressMarkers: true,
+            markerOptions: {
+              visible: false,
+            },
+          });
+        }
+        
         // Extract route steps
         const route = result.routes[0];
         const legs = route.legs[0];
@@ -607,6 +618,7 @@ const NavigationApp = () => {
           instructions: step.instructions.replace(/<[^>]*>/g, ''), // Remove HTML tags
           start_location: step.start_location,
           end_location: step.end_location,
+          path: step.path || [],
           maneuver: step.maneuver,
         }));
         
@@ -1122,6 +1134,7 @@ const NavigationApp = () => {
             if (distanceMoved > 5) { // Only add if moved more than 5 meters
               traveledPathCoordinatesRef.current.push(location);
               updateTraveledPath();
+              updateRemainingRoutePath(location); // Update remaining route path
             }
           } else {
             traveledPathCoordinatesRef.current.push(location);
@@ -1197,6 +1210,59 @@ const NavigationApp = () => {
     }
 
     traveledPathPolylineRef.current.setPath(traveledPathCoordinatesRef.current);
+  };
+
+  const updateRemainingRoutePath = (currentLocation: google.maps.LatLng) => {
+    if (!routePathRef.current || !isNavigatingRef.current || routeStepsRef.current.length === 0) return;
+
+    // Find the remaining path from current position to destination
+    const remainingPath: google.maps.LatLng[] = [];
+    const currentStep = currentStepIndexRef.current;
+    
+    // Add current location as starting point
+    remainingPath.push(currentLocation);
+    
+    // Add the rest of the current step from current position to step end
+    if (currentStep < routeStepsRef.current.length) {
+      const step = routeStepsRef.current[currentStep];
+      if (step.path && step.path.length > 0) {
+        // Find the closest point on the step path to current location
+        let closestIndex = 0;
+        let minDistance = Infinity;
+        
+        for (let i = 0; i < step.path.length; i++) {
+          const distance = window.google.maps.geometry.spherical.computeDistanceBetween(
+            currentLocation, 
+            step.path[i]
+          );
+          if (distance < minDistance) {
+            minDistance = distance;
+            closestIndex = i;
+          }
+        }
+        
+        // Add remaining points from current step
+        for (let i = closestIndex + 1; i < step.path.length; i++) {
+          remainingPath.push(step.path[i]);
+        }
+      }
+      
+      // Add all subsequent steps
+      for (let i = currentStep + 1; i < routeStepsRef.current.length; i++) {
+        const step = routeStepsRef.current[i];
+        if (step.path) {
+          for (let j = 0; j < step.path.length; j++) {
+            remainingPath.push(step.path[j]);
+          }
+        } else {
+          remainingPath.push(step.start_location);
+          remainingPath.push(step.end_location);
+        }
+      }
+    }
+    
+    // Update the route path to show only remaining portion
+    routePathRef.current.setPath(remainingPath);
   };
 
   // Clear error messages after 5 seconds
