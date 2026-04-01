@@ -987,14 +987,26 @@ const NavigationApp = () => {
     userManuallyZoomedRef.current = false; // Reset manual zoom flag
     userInteractingWithMapRef.current = false;
 
-    // Hide route endpoints ("A"/"B") once navigation begins.
+    // Hide route endpoints ("A"/"B") once navigation begins - force hide them
     if (originMarkerRef.current) {
       originMarkerRef.current.setVisible(false);
       originMarkerRef.current.setMap(null);
+      originMarkerRef.current = null;
     }
     if (destinationMarkerRef.current) {
       destinationMarkerRef.current.setVisible(false);
       destinationMarkerRef.current.setMap(null);
+      destinationMarkerRef.current = null;
+    }
+    
+    // Also suppress DirectionsRenderer markers during navigation
+    if (directionsRendererRef.current) {
+      directionsRendererRef.current.setOptions({
+        suppressMarkers: true,
+        markerOptions: {
+          visible: false,
+        },
+      });
     }
 
     // Send "start" signal via Bluetooth when navigation begins
@@ -1221,6 +1233,16 @@ const NavigationApp = () => {
         fillOpacity: 1,
         strokeColor: '#ffffff',
         strokeWeight: 2,
+      });
+    }
+    
+    // Restore DirectionsRenderer markers when navigation stops
+    if (directionsRendererRef.current) {
+      directionsRendererRef.current.setOptions({
+        suppressMarkers: false,
+        markerOptions: {
+          visible: true,
+        },
       });
     }
     
