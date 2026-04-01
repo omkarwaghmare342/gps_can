@@ -862,10 +862,15 @@ const NavigationApp = () => {
   };
 
   const updateCurrentInstruction = () => {
-    if (routeStepsRef.current.length === 0 || !currentLocation) return;
+    if (routeStepsRef.current.length === 0 || !currentLocation) {
+      console.log('updateCurrentInstruction: No steps or location');
+      return;
+    }
 
     const steps = routeStepsRef.current;
     let currentStep = currentStepIndexRef.current;
+    console.log('updateCurrentInstruction: Current step:', currentStep, 'Total steps:', steps.length);
+    
     if (turnSentRef.current.stepIndex !== currentStep) {
       turnSentRef.current = { stepIndex: currentStep, sent: false };
     }
@@ -876,6 +881,7 @@ const NavigationApp = () => {
         currentLocation,
         steps[currentStep].end_location
       );
+      console.log('updateCurrentInstruction: Distance to step end:', distanceToCurrentStepEnd.toFixed(2) + 'm');
       
       // If within 50m of step end and not the last step, advance to next step
       if (distanceToCurrentStepEnd < 50 && currentStep < steps.length - 1) {
@@ -920,8 +926,11 @@ const NavigationApp = () => {
         step.end_location
       );
 
+      console.log('updateCurrentInstruction: Distance to next turn:', distanceToNextTurn.toFixed(2) + 'm');
+
       // Extract turn direction
       const turnDirection = extractTurnDirection(step.instructions);
+      console.log('updateCurrentInstruction: Turn direction:', turnDirection);
       
       // Stabilize displayed/sent distance: ignore tiny jumps (2–5m), and smooth by clamping sudden spikes.
       const prevDist = lastInstructionDistanceRef.current;
@@ -1131,6 +1140,7 @@ const NavigationApp = () => {
               traveledPathCoordinatesRef.current.push(location);
               updateTraveledPath();
               updateRemainingRoutePath(location); // Update remaining route path
+              updateCurrentInstruction(); // Update instruction when moving
             }
           } else {
             traveledPathCoordinatesRef.current.push(location);
