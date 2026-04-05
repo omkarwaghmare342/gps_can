@@ -19,6 +19,8 @@ interface RouteStep {
   start_location: google.maps.LatLng;
   end_location: google.maps.LatLng;
   maneuver?: string;
+  /** Detailed polyline points for this step — used for accurate distance snapping */
+  path: google.maps.LatLng[];
 }
 
 const NavigationApp = () => {
@@ -40,10 +42,19 @@ const NavigationApp = () => {
   const userMarkerRef = useRef<google.maps.Marker | null>(null);
   const routeInfoRef = useRef<{ distance: string; duration: string } | null>(null);
   const traveledPathCoordinatesRef = useRef<google.maps.LatLng[]>([]);
+  // Ref mirror of currentLocation so updateCurrentInstruction never captures a stale closure value
+  const currentLocationRef = useRef<google.maps.LatLng | null>(null);
+  // Tracks which step index has already had its TURN command sent to avoid flooding ESP32
+  const turnSentForStepRef = useRef<number>(-1);
 
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<google.maps.LatLng | null>(null);
+  // Helper that keeps both state and ref in sync – avoids stale closure in callbacks
+  const setCurrentLocationSync = (loc: google.maps.LatLng | null) => {
+    currentLocationRef.current = loc;
+    setCurrentLocation(loc);
+  };
   const [origin, setOrigin] = useState<string>('');
   const [originLocation, setOriginLocation] = useState<google.maps.LatLng | null>(null);
   const [destination, setDestination] = useState<string>('');
@@ -197,13 +208,8 @@ const NavigationApp = () => {
     }
   }, [isNavigating]);
 
-  // Trigger instruction updates when location changes during navigation
-  useEffect(() => {
-    if (isNavigating && currentLocation && hasRoute) {
-      updateCurrentInstruction();
-      addLog(`Location updated during navigation: ${currentLocation.lat().toFixed(6)}, ${currentLocation.lng().toFixed(6)}`);
-    }
-  }, [currentLocation, isNavigating, hasRoute]);
+  // NOTE: updateCurrentInstruction is called directly inside the watchPosition callback
+  // using currentLocationRef so it always has the live position. No separate effect needed.
 
   const calculateHeadingFromPoints = (from: google.maps.LatLng, to: google.maps.LatLng): number => {
     const spherical = window.google.maps.geometry.spherical;
@@ -437,8 +443,9 @@ const NavigationApp = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMapLoaded]);
 
-  // Calculate route when both origin and destination are available
+  // Calculate route when both origin and destination are available, but NOT while actively navigating
   useEffect(() => {
+    if (isNavigating) return; // Never recalculate mid-navigation
     const origin = useMyLocation ? currentLocation : originLocation;
     if (origin && destinationLocation) {
       console.log('Both locations available, calculating route');
@@ -466,7 +473,7 @@ const NavigationApp = () => {
           position.coords.latitude,
           position.coords.longitude
         );
-        setCurrentLocation(location);
+        setCurrentLocationSync(location);
         console.log('Current location obtained:', location.toString(), 'Accuracy:', position.coords.accuracy);
         
         if (mapInstanceRef.current) {
@@ -669,16 +676,19 @@ const NavigationApp = () => {
       if (status === window.google.maps.DirectionsStatus.OK && result) {
         directionsRendererRef.current?.setDirections(result);
         
-        // Extract route steps
+        // Extract route steps — keep the raw instructions (with HTML) so maneuver lookup works,
+        // but also store the detailed path array per step for accurate distance snapping.
         const route = result.routes[0];
         const legs = route.legs[0];
         routeStepsRef.current = legs.steps.map((step: google.maps.DirectionsStep) => ({
           distance: step.distance!,
           duration: step.duration!,
-          instructions: step.instructions.replace(/<[^>]*>/g, ''), // Remove HTML tags
+          instructions: step.instructions, // keep HTML; we strip it at display time
           start_location: step.start_location,
           end_location: step.end_location,
           maneuver: step.maneuver,
+          // Store the detailed polyline path so updateCurrentInstruction can snap to it
+          path: step.path && step.path.length > 0 ? step.path : [step.start_location, step.end_location],
         }));
         
         // Build a visible path for the route that follows user movement
@@ -792,29 +802,47 @@ const NavigationApp = () => {
     });
   };
 
-  const extractTurnDirection = (instructions: string): string => {
-    const lowerInstructions = instructions.toLowerCase();
-    
-    // Check for specific turn directions
-    if (lowerInstructions.includes('turn left') || lowerInstructions.includes('left turn')) {
-      return 'LEFT';
-    } else if (lowerInstructions.includes('turn right') || lowerInstructions.includes('right turn')) {
-      return 'RIGHT';
-    } else if (lowerInstructions.includes('straight') || lowerInstructions.includes('continue')) {
-      return 'STRAIGHT';
-    } else if (lowerInstructions.includes('u-turn') || lowerInstructions.includes('make a u')) {
-      return 'U_TURN';
-    } else if (lowerInstructions.includes('roundabout') || lowerInstructions.includes('traffic circle')) {
-      return 'ROUNDABOUT';
-    } else if (lowerInstructions.includes('merge') || lowerInstructions.includes('ramp')) {
-      return 'MERGE';
-    } else if (lowerInstructions.includes('exit')) {
-      return 'EXIT';
-    } else if (lowerInstructions.includes('keep') || lowerInstructions.includes('stay')) {
-      return 'KEEP';
-    } else {
-      return 'STRAIGHT'; // Default direction
+  /**
+   * Derive turn direction from a route step.
+   * Priority: maneuver field (authoritative from Google) → text fallback.
+   * The maneuver field is the ground truth – text matching was causing LEFT/RIGHT
+   * swaps because instructions like "Keep left" or "Slight right" didn't match
+   * the old "turn left / turn right" patterns.
+   */
+  const extractTurnDirection = (instructions: string, maneuver?: string): string => {
+    // --- 1. Use Google Maps maneuver field when available ---
+    if (maneuver) {
+      const m = maneuver.toLowerCase();
+      if (m.includes('uturn'))                          return 'U_TURN';
+      if (m === 'turn-left' || m === 'sharp-left' || m === 'slight-left' || m === 'ramp-left' || m === 'fork-left')  return 'LEFT';
+      if (m === 'turn-right' || m === 'sharp-right' || m === 'slight-right' || m === 'ramp-right' || m === 'fork-right') return 'RIGHT';
+      if (m.includes('roundabout'))                     return 'ROUNDABOUT';
+      if (m === 'merge' || m === 'straight')            return 'STRAIGHT';
+      if (m.includes('keep-left'))                      return 'LEFT';
+      if (m.includes('keep-right'))                     return 'RIGHT';
     }
+
+    // --- 2. Text fallback (strip HTML tags first) ---
+    const text = instructions.replace(/<[^>]*>/g, '').toLowerCase();
+
+    if (text.includes('u-turn') || text.includes('make a u'))          return 'U_TURN';
+    if (text.includes('roundabout') || text.includes('traffic circle')) return 'ROUNDABOUT';
+    // Check right BEFORE generic "left/right" to avoid partial matches
+    if (
+      text.includes('turn right') || text.includes('right turn') ||
+      text.includes('keep right') || text.includes('slight right') ||
+      text.includes('sharp right') || text.includes('bear right')
+    ) return 'RIGHT';
+    if (
+      text.includes('turn left') || text.includes('left turn') ||
+      text.includes('keep left')  || text.includes('slight left') ||
+      text.includes('sharp left')  || text.includes('bear left')
+    ) return 'LEFT';
+    if (text.includes('merge') || text.includes('ramp'))               return 'MERGE';
+    if (text.includes('exit'))                                          return 'EXIT';
+    if (text.includes('straight') || text.includes('continue'))        return 'STRAIGHT';
+
+    return 'STRAIGHT'; // safe default
   };
 
   // Debounce Bluetooth data sending to avoid spam
@@ -827,172 +855,222 @@ const NavigationApp = () => {
 
   const sendNavigationData = (distance: number, turnDirection: string) => {
     const now = Date.now();
-    const distanceChanged = !lastSentDataRef.current || 
+    const distanceChanged = !lastSentDataRef.current ||
       Math.abs(distance - lastSentDataRef.current.distance) >= MIN_DISTANCE_CHANGE;
-    const directionChanged = !lastSentDataRef.current || 
+    const directionChanged = !lastSentDataRef.current ||
       lastSentDataRef.current.direction !== turnDirection;
     const timeElapsed = now - lastSentTimeRef.current;
-    
-    addLog(`Navigation data: ${Math.round(distance)}m, ${turnDirection}`);
-    
-    // Enhanced logic to prevent Bluetooth command flooding
-    // Only send if:
-    // 1. Direction changed (new turn) AND enough time passed
-    // 2. Distance decreased significantly AND enough time passed
-    // 3. Critical events (arrival, start)
+
+    addLog(`Nav data: ${Math.round(distance)}m, ${turnDirection}`);
+
     const isDistanceDecreasing = !lastSentDataRef.current || distance <= lastSentDataRef.current.distance;
     const isCriticalEvent = turnDirection === 'ARRIVED' || turnDirection === 'START';
-    const shouldSend = isCriticalEvent || 
+    const shouldSend = isCriticalEvent ||
       ((directionChanged || (distanceChanged && isDistanceDecreasing)) && timeElapsed >= MIN_TIME_INTERVAL);
-    
+
     if (shouldSend) {
       const data = `${Math.round(distance)}:${turnDirection}`;
-      addLog(`Sending via Bluetooth: ${data} (Reason: ${isCriticalEvent ? 'critical' : directionChanged ? 'direction change' : 'distance change'})`);
-      
-      if (bluetoothDevice && bluetoothService.isConnected()) {
-        bluetoothService.sendData(data).catch((error) => {
-          addLog('ERROR: Bluetooth send failed - ' + error);
-          console.error('Error sending navigation data via Bluetooth:', error);
+      addLog(`BT send: ${data}`);
+
+      // Use bluetoothService directly — avoids stale bluetoothDevice state closure
+      if (bluetoothService.isConnected()) {
+        bluetoothService.sendData(data).catch(err => {
+          addLog('ERROR: BT send failed - ' + err);
         });
       } else {
-        addLog(`Bluetooth not connected. Data: ${data}`);
-        console.log('Bluetooth not connected. Navigation data:', data);
+        addLog(`BT not connected. Data: ${data}`);
       }
-      
-      // Update last sent data
+
       lastSentDataRef.current = { distance, direction: turnDirection };
       lastSentTimeRef.current = now;
     } else {
-      addLog(`Throttled data send: ${Math.round(distance)}m, ${turnDirection}`);
+      addLog(`BT throttled: ${Math.round(distance)}m, ${turnDirection}`);
     }
   };
 
+  // Helper: perpendicular distance from a point to a route segment (metres)
+  const distanceToSegmentMeters = (
+    point: google.maps.LatLng,
+    start: google.maps.LatLng,
+    end: google.maps.LatLng
+  ): number => {
+    const spherical = window.google.maps.geometry.spherical;
+    const aToB = spherical.computeDistanceBetween(start, end);
+    if (aToB === 0) return spherical.computeDistanceBetween(point, start);
+    const aToP = spherical.computeDistanceBetween(start, point);
+    const bToP = spherical.computeDistanceBetween(end, point);
+    const t = Math.max(0, Math.min(1,
+      (aToP * aToP - bToP * bToP + aToB * aToB) / (2 * aToB * aToB)
+    ));
+    const projection = spherical.interpolate(start, end, t);
+    return spherical.computeDistanceBetween(point, projection);
+  };
+
   const updateCurrentInstruction = () => {
-    if (routeStepsRef.current.length === 0 || !currentLocation) return;
+    // Always read live position from ref — never from stale closure
+    const liveLocation = currentLocationRef.current;
+    if (routeStepsRef.current.length === 0 || !liveLocation) return;
 
     const now = Date.now();
     const steps = routeStepsRef.current;
     let currentStep = currentStepIndexRef.current;
-    
-    // Reduced throttling for live distance updates - only throttle if no step change
-    if (now - lastInstructionUpdateRef.current < 1000) { // Reduced to 1 second
-      // Only update if we might have changed steps
-      if (currentStep === lastStepIndexRef.current) {
-        return;
-      }
+
+    // Throttle: max once per 800ms UNLESS the step index changed
+    if (now - lastInstructionUpdateRef.current < 800) {
+      if (currentStep === lastStepIndexRef.current) return;
     }
-    
     lastInstructionUpdateRef.current = now;
-    
-    // Check if user has passed the current step
+
+    // ── Step advance check ─────────────────────────────────────────────────
+    // Use 30m threshold for advancing so we move to the next step before
+    // the TURN command fires at 20m. This prevents the "at the turn but
+    // still showing distance" bug.
     if (currentStep < steps.length) {
-      const distanceToCurrentStepEnd = window.google.maps.geometry.spherical.computeDistanceBetween(
-        currentLocation,
+      const distToEnd = window.google.maps.geometry.spherical.computeDistanceBetween(
+        liveLocation,
         steps[currentStep].end_location
       );
-      
-      // If within 50m of step end and not the last step, advance to next step
-      if (distanceToCurrentStepEnd < 50 && currentStep < steps.length - 1) {
-        currentStep = currentStep + 1;
+      if (distToEnd < 30 && currentStep < steps.length - 1) {
+        currentStep += 1;
         currentStepIndexRef.current = currentStep;
-        lastStepIndexRef.current = currentStep; // Track step change
+        lastStepIndexRef.current = currentStep;
+        // Tell ESP32 the turn is done — once per step transition
+        if (turnSentForStepRef.current < currentStep && bluetoothService.isConnected()) {
+          bluetoothService.sendData('STRAIGHT').catch(console.error);
+          addLog(`Post-turn STRAIGHT sent (now on step ${currentStep})`);
+        }
         console.log('Advanced to step:', currentStep);
       }
     }
 
-    // Find the step the user should be on based on proximity
-    // This handles cases where GPS jumps or user deviates
+    // ── Proximity-based step correction ───────────────────────────────────
+    // Look ±2 steps around current to handle GPS jumps / deviations
     for (let i = Math.max(0, currentStep - 2); i < Math.min(steps.length, currentStep + 3); i++) {
       const step = steps[i];
-      const distanceToStepStart = window.google.maps.geometry.spherical.computeDistanceBetween(
-        currentLocation,
-        step.start_location
-      );
-      const distanceToEnd = window.google.maps.geometry.spherical.computeDistanceBetween(
-        currentLocation,
-        step.end_location
-      );
-      const stepLength = window.google.maps.geometry.spherical.computeDistanceBetween(
-        step.start_location,
-        step.end_location
-      );
-
-      // If user is closer to this step's end than current step, and hasn't passed it
-      if (distanceToEnd < distanceToStepStart && distanceToEnd < stepLength * 1.2) {
-        if (i > currentStep) {
-          currentStep = i;
-          currentStepIndexRef.current = currentStep;
-          lastStepIndexRef.current = currentStep; // Track step change
-          console.log('Corrected to step:', currentStep);
-          break;
-        }
+      const dStart = window.google.maps.geometry.spherical.computeDistanceBetween(liveLocation, step.start_location);
+      const dEnd   = window.google.maps.geometry.spherical.computeDistanceBetween(liveLocation, step.end_location);
+      const stepLen = window.google.maps.geometry.spherical.computeDistanceBetween(step.start_location, step.end_location);
+      if (dEnd < dStart && dEnd < stepLen * 1.2 && i > currentStep) {
+        currentStep = i;
+        currentStepIndexRef.current = currentStep;
+        lastStepIndexRef.current = currentStep;
+        console.log('Corrected to step:', currentStep);
+        break;
       }
     }
 
-    if (currentStep < steps.length) {
-      const step = steps[currentStep];
-      const distanceToNextTurn = window.google.maps.geometry.spherical.computeDistanceBetween(
-        currentLocation,
-        step.end_location
-      );
-
-      // Extract turn direction
-      const turnDirection = extractTurnDirection(step.instructions);
-      
-      // Send navigation data (distance in meters and turn direction)
-      sendNavigationData(distanceToNextTurn, turnDirection);
-
-      // Format instruction for display
-      let instruction = '';
-      if (distanceToNextTurn < 50) {
-        instruction = step.instructions;
-        // Critical: Send immediate turn command when within 50m
-        if (bluetoothDevice && bluetoothService.isConnected()) {
-          bluetoothService.sendData(`TURN:${turnDirection}`).catch((error) => {
-            addLog('ERROR: Turn command failed - ' + error);
-            console.error('Error sending turn command via Bluetooth:', error);
-          });
-          addLog(`Critical turn command sent: ${turnDirection} (Distance: ${Math.round(distanceToNextTurn)}m)`);
-        } else {
-          addLog(`Turn command (not connected): ${turnDirection} at ${Math.round(distanceToNextTurn)}m`);
-        }
-      } else if (distanceToNextTurn < 1000) {
-        instruction = `In ${Math.round(distanceToNextTurn)}m, ${step.instructions}`;
-      } else {
-        const km = (distanceToNextTurn / 1000).toFixed(1);
-        instruction = `In ${km}km, ${step.instructions}`;
-      }
-
-      setCurrentInstruction(instruction);
-      addLog(`Distance updated: ${Math.round(distanceToNextTurn)}m to ${turnDirection}`);
-    } else {
-      // Reached destination
-      const finalInstruction = 'You have arrived at your destination';
-      setCurrentInstruction(finalInstruction);
-      
-      // Send arrival data
+    // ── Destination reached ───────────────────────────────────────────────
+    if (currentStep >= steps.length) {
+      setCurrentInstruction('You have arrived at your destination');
       sendNavigationData(0, 'ARRIVED');
-      
-      // Show arrival popup
       setTimeout(() => {
         alert('🎯 Destination Reached! You have successfully arrived at your destination.');
       }, 500);
-      
       stopNavigation();
+      return;
     }
+
+    // ── Compute accurate distance ─────────────────────────────────────────
+    // Snap the user position to the nearest point on the CURRENT step path
+    // so the displayed distance tracks the road, not a straight-line to the
+    // turn point. This fixes the "showing 200m when turn is 100m" issue.
+    const step = steps[currentStep];
+
+    // Build the step's detailed path if available; else use start→end
+    const stepPath: google.maps.LatLng[] = [];
+    if ((step as any).path && (step as any).path.length > 0) {
+      stepPath.push(...(step as any).path);
+    } else {
+      stepPath.push(step.start_location, step.end_location);
+    }
+
+    // Find the segment the user is closest to, then compute remaining distance
+    // along the path from that projection point to the turn (end_location)
+    let minSegDist = Infinity;
+    let bestSegIdx = 0;
+    for (let s = 0; s < stepPath.length - 1; s++) {
+      const segDist = distanceToSegmentMeters(liveLocation, stepPath[s], stepPath[s + 1]);
+      if (segDist < minSegDist) {
+        minSegDist = segDist;
+        bestSegIdx = s;
+      }
+    }
+
+    // Remaining road distance = distance from projection on best segment → end of step
+    let remainingDist = 0;
+    // Projection parameter along the best segment
+    const segStart = stepPath[bestSegIdx];
+    const segEnd   = stepPath[bestSegIdx + 1];
+    const aToB = window.google.maps.geometry.spherical.computeDistanceBetween(segStart, segEnd);
+    const aToP = window.google.maps.geometry.spherical.computeDistanceBetween(segStart, liveLocation);
+    const bToP = window.google.maps.geometry.spherical.computeDistanceBetween(segEnd, liveLocation);
+    const t = aToB > 0
+      ? Math.max(0, Math.min(1, (aToP * aToP - bToP * bToP + aToB * aToB) / (2 * aToB * aToB)))
+      : 0;
+    // Distance from projected point to end of this segment
+    remainingDist += aToB * (1 - t);
+    // Add full lengths of remaining segments in this step
+    for (let s = bestSegIdx + 1; s < stepPath.length - 1; s++) {
+      remainingDist += window.google.maps.geometry.spherical.computeDistanceBetween(stepPath[s], stepPath[s + 1]);
+    }
+
+    // Clamp: never show negative or impossibly large values
+    remainingDist = Math.max(0, remainingDist);
+
+    const turnDirection = extractTurnDirection(step.instructions, step.maneuver);
+
+    // ── Send BT data (debounced) ──────────────────────────────────────────
+    sendNavigationData(remainingDist, turnDirection);
+
+    // ── Build display instruction ─────────────────────────────────────────
+    let instruction: string;
+    const roundedDist = Math.round(remainingDist);
+
+    if (remainingDist < 20) {
+      // Right at the turn — just show the maneuver text, no distance prefix
+      instruction = step.instructions.replace(/<[^>]*>/g, '');
+
+      // One-shot TURN command per step
+      if (turnSentForStepRef.current !== currentStep) {
+        turnSentForStepRef.current = currentStep;
+        if (bluetoothService.isConnected()) {
+          bluetoothService.sendData(`TURN:${turnDirection}`).catch(err => addLog('ERROR: Turn cmd - ' + err));
+          addLog(`TURN:${turnDirection} fired at step ${currentStep} (${roundedDist}m)`);
+        } else {
+          addLog(`Turn cmd (BT off): ${turnDirection} at ${roundedDist}m`);
+        }
+      }
+    } else if (remainingDist < 1000) {
+      instruction = `In ${roundedDist}m, ${step.instructions.replace(/<[^>]*>/g, '')}`;
+    } else {
+      const km = (remainingDist / 1000).toFixed(1);
+      instruction = `In ${km}km, ${step.instructions.replace(/<[^>]*>/g, '')}`;
+    }
+
+    // Only call setCurrentInstruction when the text actually changes — prevents
+    // React re-renders on every GPS tick that cause the panel to "flash"
+    setCurrentInstruction(prev => {
+      if (prev === instruction) return prev;
+      return instruction;
+    });
+
+    addLog(`Step ${currentStep}: ${roundedDist}m → ${turnDirection}`);
   };
 
   const startNavigation = () => {
     setIsNavigating(true);
     setLocationError('');
-    setPreviousLocation(null); // Reset for heading calculation
-    userManuallyZoomedRef.current = false; // Reset manual zoom flag
+    setPreviousLocation(null);
+    userManuallyZoomedRef.current = false;
+    turnSentForStepRef.current = -1; // Reset per-step turn guard
+    lastSentDataRef.current = null;  // Reset BT throttle
+    lastSentTimeRef.current = 0;
     addLog('Navigation started');
 
     // Send "start" signal via Bluetooth when navigation begins
-    if (bluetoothDevice && bluetoothService.isConnected()) {
+    if (bluetoothService.isConnected()) {
       sendNavigationData(0, 'START');
-      addLog('Bluetooth updated with "start" - Navigation started');
+      addLog('Bluetooth: START sent');
     } else {
       addLog('Navigation started without Bluetooth connection');
     }
@@ -1019,7 +1097,7 @@ const NavigationApp = () => {
             processedLocation;
           lastMarkerPositionRef.current = processedLocation;
 
-          setCurrentLocation(processedLocation);
+          setCurrentLocationSync(processedLocation);
           setOriginLocation(processedLocation);
 
           // Calculate heading from movement for more accurate direction
@@ -1165,6 +1243,11 @@ const NavigationApp = () => {
     }
     setIsNavigating(false);
     
+    // Reset Bluetooth send state so next navigation session is not throttled
+    lastSentDataRef.current = null;
+    lastSentTimeRef.current = 0;
+    turnSentForStepRef.current = -1;
+    
     // Clear traveled path
     if (traveledPathRef) {
       traveledPathRef.setMap(null);
@@ -1291,31 +1374,6 @@ const NavigationApp = () => {
     }
   };
 
-  // Helper: shortest distance from current location to any route segment
-  const distanceToSegmentMeters = (
-    point: google.maps.LatLng,
-    start: google.maps.LatLng,
-    end: google.maps.LatLng
-  ): number => {
-    const spherical = window.google.maps.geometry.spherical;
-    const aToB = spherical.computeDistanceBetween(start, end);
-    if (aToB === 0) return spherical.computeDistanceBetween(point, start);
-
-    // Project point onto segment (clamped)
-    const aToP = spherical.computeDistanceBetween(start, point);
-    const bToP = spherical.computeDistanceBetween(end, point);
-    const t = Math.max(
-      0,
-      Math.min(
-        1,
-        (Math.pow(aToP, 2) - Math.pow(bToP, 2) + Math.pow(aToB, 2)) /
-          (2 * Math.pow(aToB, 2))
-      )
-    );
-    const projection = spherical.interpolate(start, end, t);
-    return spherical.computeDistanceBetween(point, projection);
-  };
-
   const computeMinDistanceToRoute = (location: google.maps.LatLng): number | null => {
     if (!routePathRef.current) return null;
     const path = routePathRef.current.getPath();
@@ -1413,7 +1471,7 @@ const NavigationApp = () => {
     if (destInput) destInput.value = '';
     
     // Clear Bluetooth data
-    if (bluetoothDevice && bluetoothService.isConnected()) {
+    if (bluetoothService.isConnected()) {
       bluetoothService.sendData('').catch((error) => {
         console.error('Error clearing Bluetooth data:', error);
       });
@@ -1556,7 +1614,15 @@ const NavigationApp = () => {
 
         {currentInstruction && (
           <div className="instruction-panel">
-            <div className="instruction-text">{currentInstruction}</div>
+            <div className="instruction-arrow">
+              {currentInstruction.toLowerCase().includes('right') ? '→' :
+               currentInstruction.toLowerCase().includes('left') ? '←' :
+               currentInstruction.toLowerCase().includes('u-turn') ? '↩' :
+               currentInstruction.toLowerCase().includes('arrived') ? '🎯' : '↑'}
+            </div>
+            <div className="instruction-text">
+              {currentInstruction.replace(/<[^>]*>/g, '')}
+            </div>
           </div>
         )}
 
