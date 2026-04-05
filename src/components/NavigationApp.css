@@ -860,7 +860,7 @@
 .log-toggle-fab {
   position: fixed;
   right: 1rem;
-  bottom: 7rem;
+  bottom: 8.5rem;
   width: 48px;
   height: 48px;
   border-radius: 50%;
@@ -888,16 +888,16 @@
 
 /* Adjust position when navigating */
 .navigation-container:has(.controls-overlay.navigating) .log-toggle-fab {
-  bottom: 9rem;
+  bottom: 10.5rem;
 }
 
 @media (max-width: 768px) {
   .log-toggle-fab {
     right: 0.5rem;
-    bottom: 6.5rem;
+    bottom: 8rem;
   }
   
   .navigation-container:has(.controls-overlay.navigating) .log-toggle-fab {
-    bottom: 8.5rem;
+    bottom: 10rem;
   }
 }
