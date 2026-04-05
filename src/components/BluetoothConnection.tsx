@@ -14,7 +14,7 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
   const [isConnected, setIsConnected] = useState(false);
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
   const [error, setError] = useState<string>('');
-  const [showModal, setShowModal] = useState(true);
+  const [showModal, setShowModal] = useState(false); // Start with modal hidden
   const [isCollapsed, setIsCollapsed] = useState(true);
 
   useEffect(() => {
@@ -128,7 +128,17 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
   }
 
   if (!showModal) {
-    return null;
+    return (
+      <div className="bluetooth-float-button">
+        <button
+          onClick={() => setShowModal(true)}
+          className="bluetooth-connect-small"
+          title="Connect Bluetooth Device"
+        >
+          🔵
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -179,6 +189,13 @@ const BluetoothConnection = ({ onConnected, onDisconnected }: BluetoothConnectio
                     🔵 Connect Bluetooth Device
                   </>
                 )}
+              </button>
+
+              <button
+                onClick={() => setShowModal(false)}
+                className="bluetooth-skip-btn"
+              >
+                ⏭️ Skip - Use Without Bluetooth
               </button>
 
               <div className="bluetooth-info">

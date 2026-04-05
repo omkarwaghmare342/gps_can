@@ -855,3 +855,49 @@
     max-height: 140px;
   }
 }
+
+/* Log Toggle Button */
+.log-toggle-fab {
+  position: fixed;
+  right: 1rem;
+  bottom: 7rem;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid #4CAF50;
+  font-size: 1.25rem;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.log-toggle-fab:hover {
+  background: #f1f8e9;
+  transform: scale(1.1);
+  box-shadow: 0 6px 16px rgba(76, 175, 80, 0.4);
+}
+
+.log-toggle-fab:active {
+  transform: scale(0.95);
+}
+
+/* Adjust position when navigating */
+.navigation-container:has(.controls-overlay.navigating) .log-toggle-fab {
+  bottom: 9rem;
+}
+
+@media (max-width: 768px) {
+  .log-toggle-fab {
+    right: 0.5rem;
+    bottom: 6.5rem;
+  }
+  
+  .navigation-container:has(.controls-overlay.navigating) .log-toggle-fab {
+    bottom: 8.5rem;
+  }
+}

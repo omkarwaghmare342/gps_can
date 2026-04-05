@@ -1605,6 +1605,17 @@ const NavigationApp = () => {
         </button>
       )}
 
+      {/* Debug Log Toggle Button */}
+      {isMapLoaded && (
+        <button 
+          onClick={() => setShowLogs(!showLogs)} 
+          className="log-toggle-fab"
+          title="Toggle Debug Logs"
+        >
+          📋
+        </button>
+      )}
+
       {!isMapLoaded && (
         <div className="loading-overlay">
           <div className="loading-spinner">Loading map...</div>
