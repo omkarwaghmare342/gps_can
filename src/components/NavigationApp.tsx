@@ -58,6 +58,15 @@ const NavigationApp = () => {
   const [actualHeading, setActualHeading] = useState<number>(0);
   const [traveledPathRef, setTraveledPathRef] = useState<google.maps.Polyline | null>(null);
   const [bluetoothDevice, setBluetoothDevice] = useState<BluetoothDevice | null>(null);
+  
+  // GPS smoothing and filtering refs
+  const smoothedLocationRef = useRef<google.maps.LatLng | null>(null);
+  const lastLocationUpdateRef = useRef<number>(0);
+  const LOCATION_UPDATE_THRESHOLD = 10; // meters
+  const LOCATION_UPDATE_INTERVAL = 1000; // ms
+  const KALMAN_PROCESS_NOISE = 0.01;
+  const KALMAN_MEASUREMENT_NOISE = 5;
+  const kalmanStateRef = useRef<{ lat: number; lng: number; variance: number } | null>(null);
 
   const loadGoogleMapsScript = (apiKey: string) => {
     if (!apiKey || apiKey === 'your-google-maps-api-key') {
@@ -475,6 +484,78 @@ const NavigationApp = () => {
     );
   };
 
+  // Kalman filter for GPS smoothing
+  const kalmanFilter = (measurement: google.maps.LatLng): google.maps.LatLng => {
+    if (!kalmanStateRef.current) {
+      // Initialize with first measurement
+      kalmanStateRef.current = {
+        lat: measurement.lat(),
+        lng: measurement.lng(),
+        variance: KALMAN_MEASUREMENT_NOISE
+      };
+      return measurement;
+    }
+
+    const state = kalmanStateRef.current;
+    
+    // Prediction step (assuming constant velocity)
+    const predictedLat = state.lat;
+    const predictedLng = state.lng;
+    const predictedVariance = state.variance + KALMAN_PROCESS_NOISE;
+    
+    // Update step
+    const kalmanGain = predictedVariance / (predictedVariance + KALMAN_MEASUREMENT_NOISE);
+    
+    const newLat = predictedLat + kalmanGain * (measurement.lat() - predictedLat);
+    const newLng = predictedLng + kalmanGain * (measurement.lng() - predictedLng);
+    const newVariance = (1 - kalmanGain) * predictedVariance;
+    
+    kalmanStateRef.current = {
+      lat: newLat,
+      lng: newLng,
+      variance: newVariance
+    };
+    
+    return new window.google.maps.LatLng(newLat, newLng);
+  };
+
+  // Throttled and filtered location update
+  const shouldUpdateLocation = (newLocation: google.maps.LatLng): boolean => {
+    const now = Date.now();
+    
+    // Time-based throttling
+    if (now - lastLocationUpdateRef.current < LOCATION_UPDATE_INTERVAL) {
+      return false;
+    }
+    
+    // Distance-based filtering
+    if (smoothedLocationRef.current) {
+      const distance = window.google.maps.geometry.spherical.computeDistanceBetween(
+        smoothedLocationRef.current,
+        newLocation
+      );
+      if (distance < LOCATION_UPDATE_THRESHOLD) {
+        return false;
+      }
+    }
+    
+    return true;
+  };
+
+  const processLocationUpdate = (rawLocation: google.maps.LatLng) => {
+    // Apply Kalman filter
+    const smoothedLocation = kalmanFilter(rawLocation);
+    
+    // Check if we should update based on filtering criteria
+    if (shouldUpdateLocation(smoothedLocation)) {
+      smoothedLocationRef.current = smoothedLocation;
+      lastLocationUpdateRef.current = Date.now();
+      return smoothedLocation;
+    }
+    
+    return smoothedLocationRef.current; // Return last known good position
+  };
+
   // Smoothly animate marker between two points
   const animateMarkerMove = (
     from: google.maps.LatLng,
@@ -697,6 +778,9 @@ const NavigationApp = () => {
   const MIN_DISTANCE_CHANGE = 10; // Minimum meters change before sending new data
   const MIN_TIME_INTERVAL = 2000; // Minimum time between updates (ms)
   const lastSentTimeRef = useRef<number>(0);
+  const lastInstructionUpdateRef = useRef<number>(0);
+  const INSTRUCTION_UPDATE_INTERVAL = 3000; // Update instructions every 3 seconds max
+  const lastStepIndexRef = useRef<number>(-1); // Track step changes
 
   const sendNavigationData = (distance: number, turnDirection: string) => {
     const now = Date.now();
@@ -706,14 +790,19 @@ const NavigationApp = () => {
       lastSentDataRef.current.direction !== turnDirection;
     const timeElapsed = now - lastSentTimeRef.current;
     
-    // Only send if significant change OR direction change AND enough time has passed
-    // Also ensure distance is decreasing (monotonic) to prevent back-and-forth
+    // Enhanced logic to prevent Bluetooth command flooding
+    // Only send if:
+    // 1. Direction changed (new turn) AND enough time passed
+    // 2. Distance decreased significantly AND enough time passed
+    // 3. Critical events (arrival, start)
     const isDistanceDecreasing = !lastSentDataRef.current || distance <= lastSentDataRef.current.distance;
-    const shouldSend = ((distanceChanged && isDistanceDecreasing) || directionChanged) && timeElapsed >= MIN_TIME_INTERVAL;
+    const isCriticalEvent = turnDirection === 'ARRIVED' || turnDirection === 'START';
+    const shouldSend = isCriticalEvent || 
+      ((directionChanged || (distanceChanged && isDistanceDecreasing)) && timeElapsed >= MIN_TIME_INTERVAL);
     
     if (shouldSend) {
       const data = `${Math.round(distance)}:${turnDirection}`;
-      console.log('Sending navigation data:', data);
+      console.log('Sending navigation data:', data, '(Reason:', isCriticalEvent ? 'critical' : directionChanged ? 'direction change' : 'distance change', ')');
       
       if (bluetoothDevice && bluetoothService.isConnected()) {
         bluetoothService.sendData(data).catch((error) => {
@@ -726,14 +815,27 @@ const NavigationApp = () => {
       // Update last sent data
       lastSentDataRef.current = { distance, direction: turnDirection };
       lastSentTimeRef.current = now;
+    } else {
+      console.log('Throttled navigation data send:', `${Math.round(distance)}:${turnDirection}`);
     }
   };
 
   const updateCurrentInstruction = () => {
     if (routeStepsRef.current.length === 0 || !currentLocation) return;
 
+    const now = Date.now();
     const steps = routeStepsRef.current;
     let currentStep = currentStepIndexRef.current;
+    
+    // Throttle instruction updates to prevent excessive recalculation
+    if (now - lastInstructionUpdateRef.current < INSTRUCTION_UPDATE_INTERVAL) {
+      // Only update if we might have changed steps
+      if (currentStep === lastStepIndexRef.current) {
+        return;
+      }
+    }
+    
+    lastInstructionUpdateRef.current = now;
     
     // Check if user has passed the current step
     if (currentStep < steps.length) {
@@ -746,6 +848,7 @@ const NavigationApp = () => {
       if (distanceToCurrentStepEnd < 50 && currentStep < steps.length - 1) {
         currentStep = currentStep + 1;
         currentStepIndexRef.current = currentStep;
+        lastStepIndexRef.current = currentStep; // Track step change
         console.log('Advanced to step:', currentStep);
       }
     }
@@ -772,6 +875,7 @@ const NavigationApp = () => {
         if (i > currentStep) {
           currentStep = i;
           currentStepIndexRef.current = currentStep;
+          lastStepIndexRef.current = currentStep; // Track step change
           console.log('Corrected to step:', currentStep);
           break;
         }
@@ -828,9 +932,7 @@ const NavigationApp = () => {
 
     // Send "start" signal via Bluetooth when navigation begins
     if (bluetoothDevice && bluetoothService.isConnected()) {
-      bluetoothService.sendData('start').catch((error) => {
-        console.error('Error sending start signal via Bluetooth:', error);
-      });
+      sendNavigationData(0, 'START');
       console.log('Bluetooth updated with "start" - Navigation started');
     }
 
@@ -841,42 +943,35 @@ const NavigationApp = () => {
     if (useMyLocation && navigator.geolocation) {
       watchIdRef.current = navigator.geolocation.watchPosition(
         (position) => {
-          const location = new window.google.maps.LatLng(
+          const rawLocation = new window.google.maps.LatLng(
             position.coords.latitude,
             position.coords.longitude
           );
 
-          // Debounce very small jitter under 0.5m
-          if (lastMarkerPositionRef.current) {
-            const jitterDistance = window.google.maps.geometry.spherical.computeDistanceBetween(
-              lastMarkerPositionRef.current,
-              location
-            );
-            if (jitterDistance < 0.5) {
-              return;
-            }
-          }
+          // Process location through Kalman filter and throttling
+          const processedLocation = processLocationUpdate(rawLocation);
+          if (!processedLocation) return; // Skip if no update needed
 
           const previous =
             userMarkerRef.current?.getPosition() ||
             lastMarkerPositionRef.current ||
-            location;
-          lastMarkerPositionRef.current = location;
+            processedLocation;
+          lastMarkerPositionRef.current = processedLocation;
 
-          setCurrentLocation(location);
-          setOriginLocation(location);
+          setCurrentLocation(processedLocation);
+          setOriginLocation(processedLocation);
 
           // Calculate heading from movement for more accurate direction
           let calculatedHeading = actualHeading;
           if (previousLocation) {
-            calculatedHeading = calculateHeadingFromPoints(previousLocation, location);
+            calculatedHeading = calculateHeadingFromPoints(previousLocation, processedLocation);
             setActualHeading(calculatedHeading);
           }
-          setPreviousLocation(location);
+          setPreviousLocation(processedLocation);
 
           // Update marker position and rotation with smooth slide
           if (userMarkerRef.current) {
-            animateMarkerMove(previous, location);
+            animateMarkerMove(previous, processedLocation);
             
             // Use GPS-calculated heading for navigation, fallback to compass or device heading
             const headingValue = position.coords.heading !== null && position.coords.heading !== undefined 
@@ -904,7 +999,7 @@ const NavigationApp = () => {
               : calculatedHeading;
             const correctedHeading = (headingVal + 90) % 360;
             userMarkerRef.current = new window.google.maps.Marker({
-              position: location,
+              position: processedLocation,
               map: mapInstanceRef.current,
               icon: {
                 path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
@@ -925,24 +1020,24 @@ const NavigationApp = () => {
 
           // Add current location to traveled path (only if moved significantly)
           if (previousLocation) {
-            const distanceMoved = window.google.maps.geometry.spherical.computeDistanceBetween(previousLocation, location);
+            const distanceMoved = window.google.maps.geometry.spherical.computeDistanceBetween(previousLocation, processedLocation);
             if (distanceMoved > 5) { // Only add if moved more than 5 meters
-              traveledPathCoordinatesRef.current.push(location);
+              traveledPathCoordinatesRef.current.push(processedLocation);
               updateTraveledPath();
             }
           } else {
-            traveledPathCoordinatesRef.current.push(location);
+            traveledPathCoordinatesRef.current.push(processedLocation);
           }
 
           // Keep map centered toward current location while navigating (only if user hasn't manually zoomed)
           if (mapInstanceRef.current && !userManuallyZoomedRef.current) {
-            mapInstanceRef.current.panTo(location);
+            mapInstanceRef.current.panTo(processedLocation);
           }
 
           // Update instruction
           updateCurrentInstruction();
           // Detect off-route
-          handleOffRouteCheck(location);
+          handleOffRouteCheck(processedLocation);
         },
         (error) => {
           setLocationError(`Location tracking error: ${error.message}`);
