@@ -27,6 +27,9 @@ const NavigationApp = () => {
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
   const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(null);
   const routePathRef = useRef<google.maps.Polyline | null>(null);
+  const originMarkerRef = useRef<google.maps.Marker | null>(null);
+  const destinationMarkerRef = useRef<google.maps.Marker | null>(null);
+  const userManuallyZoomedRef = useRef<boolean>(false);
   const markerAnimationFrameRef = useRef<number | null>(null);
   const lastMarkerPositionRef = useRef<google.maps.LatLng | null>(null);
   const originAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
@@ -122,6 +125,28 @@ const NavigationApp = () => {
       }
     };
   }, []);
+
+  // Update directions renderer markers based on navigation state
+  useEffect(() => {
+    if (directionsRendererRef.current) {
+      directionsRendererRef.current.setOptions({
+        suppressMarkers: isNavigating,
+        markerOptions: {
+          visible: !isNavigating,
+        },
+      });
+    }
+  }, [isNavigating]);
+
+  // Control custom markers visibility based on navigation state
+  useEffect(() => {
+    if (originMarkerRef.current) {
+      originMarkerRef.current.setVisible(!isNavigating);
+    }
+    if (destinationMarkerRef.current) {
+      destinationMarkerRef.current.setVisible(!isNavigating);
+    }
+  }, [isNavigating]);
 
   // Initialize traveled path when navigation starts
   useEffect(() => {
@@ -234,11 +259,20 @@ const NavigationApp = () => {
       mapInstanceRef.current = map;
       console.log('initializeMap: Map instance created');
 
+      // Add zoom change listener to detect manual zoom
+      map.addListener('zoom_changed', () => {
+        userManuallyZoomedRef.current = true;
+        // Reset manual zoom flag after 10 seconds of no zoom changes
+        setTimeout(() => {
+          userManuallyZoomedRef.current = false;
+        }, 10000);
+      });
+
       // Initialize Directions Service and Renderer
       directionsServiceRef.current = new window.google.maps.DirectionsService();
       directionsRendererRef.current = new window.google.maps.DirectionsRenderer({
         map: map,
-        suppressMarkers: false,
+        suppressMarkers: false, // We'll control markers manually
         polylineOptions: {
           strokeColor: '#4285F4',
           strokeWeight: 5,
@@ -265,7 +299,17 @@ const NavigationApp = () => {
       return;
     }
 
-    // Wait a bit for the DOM to be ready
+    // Clear previous autocomplete instances
+    if (originAutocompleteRef.current) {
+      window.google.maps.event.clearInstanceListeners(originAutocompleteRef.current);
+      originAutocompleteRef.current = null;
+    }
+    if (destinationAutocompleteRef.current) {
+      window.google.maps.event.clearInstanceListeners(destinationAutocompleteRef.current);
+      destinationAutocompleteRef.current = null;
+    }
+
+    // Wait a bit for DOM to be ready
     const timer = setTimeout(() => {
       // Initialize origin autocomplete
       const originInput = document.getElementById('origin-input') as HTMLInputElement;
@@ -286,7 +330,6 @@ const NavigationApp = () => {
                 setOriginLocation(location);
                 setUseMyLocation(false);
                 // Update input value
-                const originInput = document.getElementById('origin-input') as HTMLInputElement;
                 if (originInput) {
                   originInput.value = address;
                 }
@@ -345,12 +388,12 @@ const NavigationApp = () => {
   // Calculate route when both origin and destination are available
   useEffect(() => {
     const origin = useMyLocation ? currentLocation : originLocation;
-    if (origin && destinationLocation && !hasRoute) {
+    if (origin && destinationLocation) {
       console.log('Both locations available, calculating route');
       calculateRoute(origin, destinationLocation);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentLocation, originLocation, destinationLocation, hasRoute, useMyLocation]);
+  }, [currentLocation, originLocation, destinationLocation, useMyLocation]);
 
   const requestLocationPermission = () => {
     if (!navigator.geolocation) {
@@ -540,6 +583,49 @@ const NavigationApp = () => {
           map: mapInstanceRef.current || undefined,
         });
 
+        // Create custom origin and destination markers
+        if (originLoc && destLoc) {
+          // Clear previous markers
+          if (originMarkerRef.current) {
+            originMarkerRef.current.setMap(null);
+          }
+          if (destinationMarkerRef.current) {
+            destinationMarkerRef.current.setMap(null);
+          }
+
+          // Create origin marker
+          originMarkerRef.current = new window.google.maps.Marker({
+            position: originLoc,
+            map: mapInstanceRef.current || undefined,
+            icon: {
+              path: window.google.maps.SymbolPath.CIRCLE,
+              scale: 8,
+              fillColor: '#4285F4',
+              fillOpacity: 1,
+              strokeColor: '#ffffff',
+              strokeWeight: 2,
+            },
+            label: 'A',
+            title: 'Origin',
+          });
+
+          // Create destination marker
+          destinationMarkerRef.current = new window.google.maps.Marker({
+            position: destLoc,
+            map: mapInstanceRef.current || undefined,
+            icon: {
+              path: window.google.maps.SymbolPath.CIRCLE,
+              scale: 8,
+              fillColor: '#EA4335',
+              fillOpacity: 1,
+              strokeColor: '#ffffff',
+              strokeWeight: 2,
+            },
+            label: 'B',
+            title: 'Destination',
+          });
+        }
+
         // Store route info
         const routeDistance = legs.distance?.text || '';
         const routeDuration = legs.duration?.text || '';
@@ -606,16 +692,40 @@ const NavigationApp = () => {
     }
   };
 
+  // Debounce Bluetooth data sending to avoid spam
+  const lastSentDataRef = useRef<{ distance: number; direction: string } | null>(null);
+  const MIN_DISTANCE_CHANGE = 10; // Minimum meters change before sending new data
+  const MIN_TIME_INTERVAL = 2000; // Minimum time between updates (ms)
+  const lastSentTimeRef = useRef<number>(0);
+
   const sendNavigationData = (distance: number, turnDirection: string) => {
-    const data = `${Math.round(distance)}:${turnDirection}`;
-    console.log('Sending navigation data:', data);
+    const now = Date.now();
+    const distanceChanged = !lastSentDataRef.current || 
+      Math.abs(distance - lastSentDataRef.current.distance) >= MIN_DISTANCE_CHANGE;
+    const directionChanged = !lastSentDataRef.current || 
+      lastSentDataRef.current.direction !== turnDirection;
+    const timeElapsed = now - lastSentTimeRef.current;
     
-    if (bluetoothDevice && bluetoothService.isConnected()) {
-      bluetoothService.sendData(data).catch((error) => {
-        console.error('Error sending navigation data via Bluetooth:', error);
-      });
-    } else {
-      console.log('Bluetooth not connected. Navigation data:', data);
+    // Only send if significant change OR direction change AND enough time has passed
+    // Also ensure distance is decreasing (monotonic) to prevent back-and-forth
+    const isDistanceDecreasing = !lastSentDataRef.current || distance <= lastSentDataRef.current.distance;
+    const shouldSend = ((distanceChanged && isDistanceDecreasing) || directionChanged) && timeElapsed >= MIN_TIME_INTERVAL;
+    
+    if (shouldSend) {
+      const data = `${Math.round(distance)}:${turnDirection}`;
+      console.log('Sending navigation data:', data);
+      
+      if (bluetoothDevice && bluetoothService.isConnected()) {
+        bluetoothService.sendData(data).catch((error) => {
+          console.error('Error sending navigation data via Bluetooth:', error);
+        });
+      } else {
+        console.log('Bluetooth not connected. Navigation data:', data);
+      }
+      
+      // Update last sent data
+      lastSentDataRef.current = { distance, direction: turnDirection };
+      lastSentTimeRef.current = now;
     }
   };
 
@@ -711,20 +821,10 @@ const NavigationApp = () => {
   };
 
   const startNavigation = () => {
-    if (routeStepsRef.current.length === 0) {
-      setLocationError('No route available. Please select a destination first.');
-      return;
-    }
-
-    // If using custom origin (not my location), we can still navigate but won't track GPS
-    if (!useMyLocation && !navigator.geolocation) {
-      setLocationError('GPS tracking requires location access. Please enable "My Location" for live navigation.');
-      return;
-    }
-
     setIsNavigating(true);
     setLocationError('');
     setPreviousLocation(null); // Reset for heading calculation
+    userManuallyZoomedRef.current = false; // Reset manual zoom flag
 
     // Send "start" signal via Bluetooth when navigation begins
     if (bluetoothDevice && bluetoothService.isConnected()) {
@@ -834,8 +934,8 @@ const NavigationApp = () => {
             traveledPathCoordinatesRef.current.push(location);
           }
 
-          // Keep map centered toward current location while navigating
-          if (mapInstanceRef.current) {
+          // Keep map centered toward current location while navigating (only if user hasn't manually zoomed)
+          if (mapInstanceRef.current && !userManuallyZoomedRef.current) {
             mapInstanceRef.current.panTo(location);
           }
 
@@ -943,6 +1043,16 @@ const NavigationApp = () => {
     }
     if (directionsRendererRef.current) {
       directionsRendererRef.current.setDirections({ routes: [] } as unknown as google.maps.DirectionsResult);
+    }
+    
+    // Clear custom markers
+    if (originMarkerRef.current) {
+      originMarkerRef.current.setMap(null);
+      originMarkerRef.current = null;
+    }
+    if (destinationMarkerRef.current) {
+      destinationMarkerRef.current.setMap(null);
+      destinationMarkerRef.current = null;
     }
     
     // Reset map padding after navigation stops
