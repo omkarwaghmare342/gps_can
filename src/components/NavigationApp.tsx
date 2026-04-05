@@ -58,7 +58,26 @@ const NavigationApp = () => {
   const [actualHeading, setActualHeading] = useState<number>(0);
   const [traveledPathRef, setTraveledPathRef] = useState<google.maps.Polyline | null>(null);
   const [bluetoothDevice, setBluetoothDevice] = useState<BluetoothDevice | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
   
+  // Logging function
+  const addLog = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    const logMessage = `[${timestamp}] ${message}`;
+    setLogs(prev => [...prev.slice(-99), logMessage]); // Keep last 100 logs
+    console.log(logMessage);
+  };
+
+  // Copy logs to clipboard
+  const copyLogs = () => {
+    const logsText = logs.join('\n');
+    navigator.clipboard.writeText(logsText).then(() => {
+      addLog('Logs copied to clipboard');
+    }).catch(err => {
+      addLog('Failed to copy logs: ' + err);
+    });
+  };
   // GPS smoothing and filtering refs
   const smoothedLocationRef = useRef<google.maps.LatLng | null>(null);
   const lastLocationUpdateRef = useRef<number>(0);
@@ -69,8 +88,10 @@ const NavigationApp = () => {
   const kalmanStateRef = useRef<{ lat: number; lng: number; variance: number } | null>(null);
 
   const loadGoogleMapsScript = (apiKey: string) => {
+    addLog('Loading Google Maps with API key: ' + (apiKey ? 'configured' : 'missing'));
     if (!apiKey || apiKey === 'your-google-maps-api-key') {
       console.error('NavigationApp: API key not configured');
+      addLog('ERROR: Google Maps API key not configured');
       setLocationError('Please configure your Google Maps API key in .env file');
       setIsMapLoaded(true);
       return;
@@ -79,6 +100,7 @@ const NavigationApp = () => {
     // Check if script is already loaded
     if (window.google && window.google.maps) {
       console.log('NavigationApp: Google Maps already loaded');
+      addLog('Google Maps already loaded');
       setTimeout(() => initializeMap(), 100);
       return;
     }
@@ -89,6 +111,7 @@ const NavigationApp = () => {
     
     (window as any)[callbackName] = () => {
       console.log('NavigationApp: Google Maps callback triggered');
+      addLog('Google Maps loaded successfully');
       setTimeout(() => {
         initializeMap();
         delete (window as any)[callbackName];
@@ -104,18 +127,21 @@ const NavigationApp = () => {
     script.crossOrigin = 'anonymous';
     script.onerror = (error) => {
       console.error('NavigationApp: Script load error:', error);
+      addLog('ERROR: Failed to load Google Maps script');
       setLocationError('Failed to load Google Maps. Please check your internet connection and API key.');
       setIsMapLoaded(true);
       // Retry once after delay
       setTimeout(() => {
         if (!window.google || !window.google.maps) {
           console.log('NavigationApp: Retrying Google Maps load...');
+          addLog('Retrying Google Maps load...');
           loadGoogleMapsScript(apiKey);
         }
       }, 3000);
     };
     script.onload = () => {
       console.log('NavigationApp: Script loaded successfully');
+      addLog('Google Maps script loaded');
     };
     
     document.head.appendChild(script);
@@ -123,8 +149,10 @@ const NavigationApp = () => {
 
   useEffect(() => {
     console.log('NavigationApp: Component mounted');
+    addLog('Navigation component mounted');
     const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
     console.log('NavigationApp: API Key loaded:', apiKey ? 'Yes' : 'No');
+    addLog('API Key status: ' + (apiKey ? 'configured' : 'missing'));
     
     loadGoogleMapsScript(apiKey);
 
@@ -173,7 +201,7 @@ const NavigationApp = () => {
   useEffect(() => {
     if (isNavigating && currentLocation && hasRoute) {
       updateCurrentInstruction();
-      console.log('Location updated during navigation:', currentLocation.lat(), currentLocation.lng());
+      addLog(`Location updated during navigation: ${currentLocation.lat().toFixed(6)}, ${currentLocation.lng().toFixed(6)}`);
     }
   }, [currentLocation, isNavigating, hasRoute]);
 
@@ -243,9 +271,11 @@ const NavigationApp = () => {
 
   const initializeMap = () => {
     console.log('initializeMap: Starting map initialization');
+    addLog('Initializing map...');
     try {
       if (!mapRef.current) {
         console.error('initializeMap: Map container not found');
+        addLog('ERROR: Map container not found');
         setLocationError('Map container not found');
         setIsMapLoaded(true);
         return;
@@ -253,12 +283,14 @@ const NavigationApp = () => {
 
       if (!window.google || !window.google.maps) {
         console.error('initializeMap: Google Maps API not loaded');
+        addLog('ERROR: Google Maps API not loaded');
         setLocationError('Google Maps API failed to load. Please refresh the page.');
         setIsMapLoaded(true);
         return;
       }
 
       console.log('initializeMap: Creating map instance');
+      addLog('Creating map instance');
       // Initialize map
       const map = new window.google.maps.Map(mapRef.current, {
         zoom: 15,
@@ -275,6 +307,7 @@ const NavigationApp = () => {
 
       mapInstanceRef.current = map;
       console.log('initializeMap: Map instance created');
+      addLog('Map instance created successfully');
 
       // Add zoom change listener to detect manual zoom
       map.addListener('zoom_changed', () => {
@@ -301,10 +334,12 @@ const NavigationApp = () => {
       });
 
       console.log('initializeMap: Directions service initialized');
+      addLog('Directions service initialized');
       setIsMapLoaded(true);
       requestLocationPermission();
     } catch (error) {
       console.error('initializeMap: Error initializing map:', error);
+      addLog('ERROR: Map initialization failed - ' + error);
       setLocationError(`Error initializing map: ${error instanceof Error ? error.message : 'Unknown error'}`);
       setIsMapLoaded(true);
     }
@@ -558,6 +593,7 @@ const NavigationApp = () => {
     if (shouldUpdateLocation(smoothedLocation)) {
       smoothedLocationRef.current = smoothedLocation;
       lastLocationUpdateRef.current = Date.now();
+      addLog(`Location update: ${smoothedLocation.lat().toFixed(6)}, ${smoothedLocation.lng().toFixed(6)}`);
       return smoothedLocation;
     }
     
@@ -797,6 +833,8 @@ const NavigationApp = () => {
       lastSentDataRef.current.direction !== turnDirection;
     const timeElapsed = now - lastSentTimeRef.current;
     
+    addLog(`Navigation data: ${Math.round(distance)}m, ${turnDirection}`);
+    
     // Enhanced logic to prevent Bluetooth command flooding
     // Only send if:
     // 1. Direction changed (new turn) AND enough time passed
@@ -809,13 +847,15 @@ const NavigationApp = () => {
     
     if (shouldSend) {
       const data = `${Math.round(distance)}:${turnDirection}`;
-      console.log('Sending navigation data:', data, '(Reason:', isCriticalEvent ? 'critical' : directionChanged ? 'direction change' : 'distance change', ')');
+      addLog(`Sending via Bluetooth: ${data} (Reason: ${isCriticalEvent ? 'critical' : directionChanged ? 'direction change' : 'distance change'})`);
       
       if (bluetoothDevice && bluetoothService.isConnected()) {
         bluetoothService.sendData(data).catch((error) => {
+          addLog('ERROR: Bluetooth send failed - ' + error);
           console.error('Error sending navigation data via Bluetooth:', error);
         });
       } else {
+        addLog(`Bluetooth not connected. Data: ${data}`);
         console.log('Bluetooth not connected. Navigation data:', data);
       }
       
@@ -823,7 +863,7 @@ const NavigationApp = () => {
       lastSentDataRef.current = { distance, direction: turnDirection };
       lastSentTimeRef.current = now;
     } else {
-      console.log('Throttled navigation data send:', `${Math.round(distance)}:${turnDirection}`);
+      addLog(`Throttled data send: ${Math.round(distance)}m, ${turnDirection}`);
     }
   };
 
@@ -909,9 +949,12 @@ const NavigationApp = () => {
         // Critical: Send immediate turn command when within 50m
         if (bluetoothDevice && bluetoothService.isConnected()) {
           bluetoothService.sendData(`TURN:${turnDirection}`).catch((error) => {
+            addLog('ERROR: Turn command failed - ' + error);
             console.error('Error sending turn command via Bluetooth:', error);
           });
-          console.log('Critical turn command sent:', turnDirection, 'Distance:', Math.round(distanceToNextTurn) + 'm');
+          addLog(`Critical turn command sent: ${turnDirection} (Distance: ${Math.round(distanceToNextTurn)}m)`);
+        } else {
+          addLog(`Turn command (not connected): ${turnDirection} at ${Math.round(distanceToNextTurn)}m`);
         }
       } else if (distanceToNextTurn < 1000) {
         instruction = `In ${Math.round(distanceToNextTurn)}m, ${step.instructions}`;
@@ -921,7 +964,7 @@ const NavigationApp = () => {
       }
 
       setCurrentInstruction(instruction);
-      console.log('Distance updated:', Math.round(distanceToNextTurn) + 'm to', turnDirection);
+      addLog(`Distance updated: ${Math.round(distanceToNextTurn)}m to ${turnDirection}`);
     } else {
       // Reached destination
       const finalInstruction = 'You have arrived at your destination';
@@ -944,11 +987,14 @@ const NavigationApp = () => {
     setLocationError('');
     setPreviousLocation(null); // Reset for heading calculation
     userManuallyZoomedRef.current = false; // Reset manual zoom flag
+    addLog('Navigation started');
 
     // Send "start" signal via Bluetooth when navigation begins
     if (bluetoothDevice && bluetoothService.isConnected()) {
       sendNavigationData(0, 'START');
-      console.log('Bluetooth updated with "start" - Navigation started');
+      addLog('Bluetooth updated with "start" - Navigation started');
+    } else {
+      addLog('Navigation started without Bluetooth connection');
     }
 
     // Adjust map view for navigation (will be handled by fitBounds when needed)
@@ -1569,6 +1615,31 @@ const NavigationApp = () => {
           )}
         </div>
       )}
+
+      {/* Debug Log Window */}
+      <div className={`log-window ${showLogs ? 'show' : 'hide'}`}>
+        <div className="log-header">
+          <h3>Debug Logs</h3>
+          <div className="log-controls">
+            <button onClick={copyLogs} className="log-button copy-button" title="Copy all logs">
+              📋 Copy
+            </button>
+            <button onClick={() => setShowLogs(!showLogs)} className="log-button toggle-button" title="Toggle logs">
+              {showLogs ? '👁️ Hide' : '👁️ Show'}
+            </button>
+            <button onClick={() => setLogs([])} className="log-button clear-button" title="Clear logs">
+              🗑️ Clear
+            </button>
+          </div>
+        </div>
+        <div className="log-content">
+          {logs.map((log, index) => (
+            <div key={index} className="log-entry">
+              {log}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 };
