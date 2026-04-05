@@ -68,7 +68,6 @@ const NavigationApp = () => {
   const [previousLocation, setPreviousLocation] = useState<google.maps.LatLng | null>(null);
   const [actualHeading, setActualHeading] = useState<number>(0);
   const [traveledPathRef, setTraveledPathRef] = useState<google.maps.Polyline | null>(null);
-  const [bluetoothDevice, setBluetoothDevice] = useState<BluetoothDevice | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [showLogs, setShowLogs] = useState(false);
   
@@ -1479,12 +1478,10 @@ const NavigationApp = () => {
   };
 
   const handleBluetoothConnected = (device: BluetoothDevice) => {
-    setBluetoothDevice(device);
     console.log('Bluetooth device connected:', device.name);
   };
 
   const handleBluetoothDisconnected = () => {
-    setBluetoothDevice(null);
     console.log('Bluetooth device disconnected');
   };
 
