@@ -135,6 +135,28 @@ const NavigationApp = () => {
     };
   }, []);
 
+  // Initialize traveled path when navigation starts
+  useEffect(() => {
+    if (isNavigating && currentLocation) {
+      traveledPathCoordinatesRef.current = [currentLocation];
+      // Clear previous traveled path
+      if (traveledPathRef) {
+        traveledPathRef.setMap(null);
+        setTraveledPathRef(null);
+      }
+    }
+  }, [isNavigating, currentLocation]);
+
+  // Control custom markers visibility based on navigation state
+  useEffect(() => {
+    if (originMarkerRef.current) {
+      originMarkerRef.current.setVisible(!isNavigating);
+    }
+    if (destinationMarkerRef.current) {
+      destinationMarkerRef.current.setVisible(!isNavigating);
+    }
+  }, [isNavigating]);
+
   // Update directions renderer markers based on navigation state
   useEffect(() => {
     if (directionsRendererRef.current) {
@@ -147,27 +169,13 @@ const NavigationApp = () => {
     }
   }, [isNavigating]);
 
-  // Control custom markers visibility based on navigation state
+  // Trigger instruction updates when location changes during navigation
   useEffect(() => {
-    if (originMarkerRef.current) {
-      originMarkerRef.current.setVisible(!isNavigating);
+    if (isNavigating && currentLocation && hasRoute) {
+      updateCurrentInstruction();
+      console.log('Location updated during navigation:', currentLocation.lat(), currentLocation.lng());
     }
-    if (destinationMarkerRef.current) {
-      destinationMarkerRef.current.setVisible(!isNavigating);
-    }
-  }, [isNavigating]);
-
-  // Initialize traveled path when navigation starts
-  useEffect(() => {
-    if (isNavigating && currentLocation) {
-      traveledPathCoordinatesRef.current = [currentLocation];
-      // Clear previous traveled path
-      if (traveledPathRef) {
-        traveledPathRef.setMap(null);
-        setTraveledPathRef(null);
-      }
-    }
-  }, [isNavigating, currentLocation]);
+  }, [currentLocation, isNavigating, hasRoute]);
 
   const calculateHeadingFromPoints = (from: google.maps.LatLng, to: google.maps.LatLng): number => {
     const spherical = window.google.maps.geometry.spherical;
@@ -779,7 +787,6 @@ const NavigationApp = () => {
   const MIN_TIME_INTERVAL = 2000; // Minimum time between updates (ms)
   const lastSentTimeRef = useRef<number>(0);
   const lastInstructionUpdateRef = useRef<number>(0);
-  const INSTRUCTION_UPDATE_INTERVAL = 3000; // Update instructions every 3 seconds max
   const lastStepIndexRef = useRef<number>(-1); // Track step changes
 
   const sendNavigationData = (distance: number, turnDirection: string) => {
@@ -827,8 +834,8 @@ const NavigationApp = () => {
     const steps = routeStepsRef.current;
     let currentStep = currentStepIndexRef.current;
     
-    // Throttle instruction updates to prevent excessive recalculation
-    if (now - lastInstructionUpdateRef.current < INSTRUCTION_UPDATE_INTERVAL) {
+    // Reduced throttling for live distance updates - only throttle if no step change
+    if (now - lastInstructionUpdateRef.current < 1000) { // Reduced to 1 second
       // Only update if we might have changed steps
       if (currentStep === lastStepIndexRef.current) {
         return;
@@ -899,6 +906,13 @@ const NavigationApp = () => {
       let instruction = '';
       if (distanceToNextTurn < 50) {
         instruction = step.instructions;
+        // Critical: Send immediate turn command when within 50m
+        if (bluetoothDevice && bluetoothService.isConnected()) {
+          bluetoothService.sendData(`TURN:${turnDirection}`).catch((error) => {
+            console.error('Error sending turn command via Bluetooth:', error);
+          });
+          console.log('Critical turn command sent:', turnDirection, 'Distance:', Math.round(distanceToNextTurn) + 'm');
+        }
       } else if (distanceToNextTurn < 1000) {
         instruction = `In ${Math.round(distanceToNextTurn)}m, ${step.instructions}`;
       } else {
@@ -907,6 +921,7 @@ const NavigationApp = () => {
       }
 
       setCurrentInstruction(instruction);
+      console.log('Distance updated:', Math.round(distanceToNextTurn) + 'm to', turnDirection);
     } else {
       // Reached destination
       const finalInstruction = 'You have arrived at your destination';
